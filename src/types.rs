@@ -1420,13 +1420,13 @@ pub enum PersistActionError {
     AccessDenied,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Endpoint {
     pub addr: SocketAddr,
 }
 
 /// Represents a source of cluster gossip.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct GossipSeed {
     /// The endpoint for the external HTTP endpoint of the gossip seed. The
     /// HTTP endpoint is used rather than the TCP endpoint because it is
@@ -1482,8 +1482,19 @@ pub struct ClusterSettings {
     pub(crate) external_gossip_port: u16,
 
     /// Endpoints for seeding gossip if not using DNS.
-    pub(crate) seeds: Option<vec1::Vec1<GossipSeed>>,
+    pub(crate) seeds: vec1::Vec1<GossipSeed>,
 
     /// Timeout for cluster gossip.
     pub(crate) timeout: Duration,
+}
+
+impl ClusterSettings {
+    pub fn from_gossip_seeds(seeds: vec1::Vec1<GossipSeed>) -> ClusterSettings {
+        ClusterSettings {
+            max_discover_attempts: 10,
+            external_gossip_port: 2113,
+            timeout: Duration::from_secs(10),
+            seeds,
+        }
+    }
 }

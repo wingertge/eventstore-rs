@@ -10,6 +10,7 @@ extern crate protobuf;
 extern crate tokio;
 extern crate reqwest;
 extern crate vec1;
+extern crate rand;
 
 extern crate serde;
 #[macro_use]
