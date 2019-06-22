@@ -8,6 +8,8 @@ extern crate time;
 extern crate futures;
 extern crate protobuf;
 extern crate tokio;
+extern crate reqwest;
+extern crate vec1;
 
 extern crate serde;
 #[macro_use]

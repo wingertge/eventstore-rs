@@ -1,16 +1,15 @@
 use std::io::Error;
 
 use uuid::Uuid;
-
-use internal::discovery::Endpoint;
 use internal::operations;
 use internal::package::Pkg;
+use types;
 
 pub(crate) enum Msg {
     Start,
     Shutdown,
     Tick,
-    Establish(Endpoint),
+    Establish(types::Endpoint),
     Established(Uuid),
     Arrived(Pkg),
     ConnectionClosed(Uuid, Error),

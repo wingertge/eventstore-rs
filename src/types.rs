@@ -1,7 +1,8 @@
 //! Common types used across the library.
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{ self, Read };
+use std::net::{ SocketAddr, ToSocketAddrs };
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
@@ -14,6 +15,7 @@ use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, BytesError };
+use vec1;
 
 use internal::command::Cmd;
 use internal::messages;
@@ -1416,4 +1418,72 @@ pub enum PersistActionError {
     /// The current user is not allowed to operate on the supplied stream or
     /// persistent subscription.
     AccessDenied,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct Endpoint {
+    pub addr: SocketAddr,
+}
+
+/// Represents a source of cluster gossip.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GossipSeed {
+    /// The endpoint for the external HTTP endpoint of the gossip seed. The
+    /// HTTP endpoint is used rather than the TCP endpoint because it is
+    /// required for the client to exchange gossip with the server.
+    /// standard port which should be used here in 2113.
+    pub(crate) endpoint: Endpoint,
+
+    /// The host header to be sent when requesting gossip.
+    pub(crate) header: Option<String>,
+}
+
+impl GossipSeed {
+    /// Creates a gossip seed.
+    pub fn new<A>(addrs: A) -> io::Result<GossipSeed>
+        where A: ToSocketAddrs,
+    {
+        let mut iter = addrs.to_socket_addrs()?;
+
+        if let Some(addr) = iter.next() {
+            let endpoint = Endpoint {
+                addr,
+            };
+
+            let seed = GossipSeed {
+                endpoint,
+                header: None,
+            };
+
+            Ok(seed)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
+        }
+    }
+
+    /// Creates a gossip seed with a specific HTTP header.
+    pub fn new_with_header<A>(addrs: A, header: String) -> io::Result<GossipSeed>
+        where A: ToSocketAddrs
+    {
+        let mut seed = GossipSeed::new(addrs)?;
+
+        seed.header = Some(header);
+
+        Ok(seed)
+    }
+}
+
+/// Contains settings related to a connection to a cluster.
+pub struct ClusterSettings {
+    /// The maximum number of attempts for discovering endpoints.
+    pub(crate) max_discover_attempts: usize,
+
+    /// The well-known endpoint on which cluster managers are running.
+    pub(crate) external_gossip_port: u16,
+
+    /// Endpoints for seeding gossip if not using DNS.
+    pub(crate) seeds: Option<vec1::Vec1<GossipSeed>>,
+
+    /// Timeout for cluster gossip.
+    pub(crate) timeout: Duration,
 }

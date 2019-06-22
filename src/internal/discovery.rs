@@ -2,10 +2,8 @@ use std::net::SocketAddr;
 use std::io;
 use futures::Future;
 use futures::future::{ self, FutureResult };
-
-pub struct Endpoint {
-    pub addr: SocketAddr,
-}
+use reqwest::async::Client;
+use types::Endpoint;
 
 pub struct StaticDiscovery {
     addr: SocketAddr,
