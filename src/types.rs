@@ -1447,7 +1447,7 @@ pub struct GossipSeed {
 
 impl fmt::Display for GossipSeed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "endpoint: {}", self.endpoint)
+        write!(f, "endpoint: {}", self.endpoint.addr)
     }
 }
 
@@ -1482,10 +1482,10 @@ impl GossipSeed {
     pub(crate) fn url(self) -> io::Result<reqwest::Url> {
         let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
 
-        reqwest::Url::parse(url_str)
+        reqwest::Url::parse(&url_str)
             .map_err(|error|
             {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("Wrong url: {}", error))
+                io::Error::new(io::ErrorKind::InvalidInput, format!("Wrong url [{}]: {}", url_str, error))
             })
     }
 }

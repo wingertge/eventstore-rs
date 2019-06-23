@@ -222,11 +222,13 @@ impl GossipSeedDiscovery {
     fn get_gossip_from(&self, gossip: GossipSeed)
         -> impl Future<Item=ClusterInfo, Error=io::Error>
     {
+        let client = self.client.clone();
+
         gossip.url()
             .into_future()
-            .and_then(|url|
+            .and_then(move |url|
             {
-                self.client
+                client
                     .get(url)
                     .send()
                     .and_then(|mut res| res.json::<ClusterInfo>())
