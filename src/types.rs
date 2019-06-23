@@ -1,6 +1,7 @@
 //! Common types used across the library.
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{ self, Read };
 use std::net::{ SocketAddr, ToSocketAddrs };
 use std::time::Duration;
@@ -11,6 +12,7 @@ use futures::stream::iter_ok;
 use futures::sync::mpsc::{ Receiver, Sender };
 use futures::sync::oneshot;
 use protobuf::Chars;
+use reqwest;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
@@ -1420,22 +1422,33 @@ pub enum PersistActionError {
     AccessDenied,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub struct Endpoint {
     pub addr: SocketAddr,
 }
 
+impl Endpoint {
+    pub(crate) fn from_addr(addr: SocketAddr) -> Endpoint {
+        Endpoint {
+            addr,
+        }
+    }
+}
+
 /// Represents a source of cluster gossip.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub struct GossipSeed {
     /// The endpoint for the external HTTP endpoint of the gossip seed. The
     /// HTTP endpoint is used rather than the TCP endpoint because it is
     /// required for the client to exchange gossip with the server.
     /// standard port which should be used here in 2113.
     pub(crate) endpoint: Endpoint,
+}
 
-    /// The host header to be sent when requesting gossip.
-    pub(crate) header: Option<String>,
+impl fmt::Display for GossipSeed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "endpoint: {}", self.endpoint)
+    }
 }
 
 impl GossipSeed {
@@ -1450,26 +1463,30 @@ impl GossipSeed {
                 addr,
             };
 
-            let seed = GossipSeed {
-                endpoint,
-                header: None,
-            };
-
-            Ok(seed)
+            Ok(GossipSeed::from_endpoint(endpoint))
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
         }
     }
 
-    /// Creates a gossip seed with a specific HTTP header.
-    pub fn new_with_header<A>(addrs: A, header: String) -> io::Result<GossipSeed>
-        where A: ToSocketAddrs
-    {
-        let mut seed = GossipSeed::new(addrs)?;
+    pub(crate) fn from_endpoint(endpoint: Endpoint) -> GossipSeed {
+        GossipSeed {
+            endpoint,
+        }
+    }
 
-        seed.header = Some(header);
+    pub(crate) fn from_socket_addr(addr: SocketAddr) -> GossipSeed {
+        GossipSeed::from_endpoint(Endpoint::from_addr(addr))
+    }
 
-        Ok(seed)
+    pub(crate) fn url(self) -> io::Result<reqwest::Url> {
+        let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
+
+        reqwest::Url::parse(url_str)
+            .map_err(|error|
+            {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("Wrong url: {}", error))
+            })
     }
 }
 
