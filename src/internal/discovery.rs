@@ -1,7 +1,7 @@
 use std::net::{ SocketAddr, AddrParseError };
 use std::io;
 use futures::{ IntoFuture, Future };
-use futures::future::{ self, FutureResult };
+use futures::future::{ self, FutureResult, Loop };
 use rand;
 use rand::seq::SliceRandom;
 use reqwest::async::Client;
@@ -53,9 +53,6 @@ enum VNodeState {
     ShuttingDown,
     Shutdown,
 }
-
-#[derive(Serialize, Deserialize, Debug)]
-struct ClusterInfo(pub Vec<MemberInfo>);
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -218,27 +215,32 @@ impl GossipSeedDiscovery {
         arranged_candidates.shuffle();
         arranged_candidates.gossip_seeds()
     }
+}
 
-    fn get_gossip_from(&self, gossip: GossipSeed)
-        -> impl Future<Item=ClusterInfo, Error=io::Error>
-    {
-        let client = self.client.clone();
+fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
+    -> impl Future<Item=Vec<MemberInfo>, Error=io::Error>
+{
+    gossip.url()
+        .into_future()
+        .and_then(move |url|
+        {
+            client
+                .get(url)
+                .send()
+                .and_then(|mut res| res.json::<Vec<MemberInfo>>())
+                .map_err(|error|
+                {
+                    let msg = format!("[{}] responded with [{}]", gossip, error);
+                    io::Error::new(io::ErrorKind::Other, msg)
+                })
+        })
+}
 
-        gossip.url()
-            .into_future()
-            .and_then(move |url|
-            {
-                client
-                    .get(url)
-                    .send()
-                    .and_then(|mut res| res.json::<ClusterInfo>())
-                    .map_err(|error|
-                    {
-                        let msg = format!("[{}] responded with [{}]", gossip, error);
-                        io::Error::new(io::ErrorKind::Other, msg)
-                    })
-            })
-    }
+fn boxed_future<F: 'static>(future: F)
+    -> Box<dyn Future<Item=F::Item, Error=F::Error>>
+        where F: Future
+{
+    Box::new(future)
 }
 
 impl Discovery for GossipSeedDiscovery {
@@ -253,9 +255,38 @@ impl Discovery for GossipSeedDiscovery {
                 self.candidates_from_dns(),
         };
 
-        for candidate in candidates {
+        let cloned_client = self.client.clone();
 
-        }
+        future::loop_fn(candidates.into_iter(), move |mut candidates|
+        {
+            let client = cloned_client.clone();
+
+            if let Some(candidate) = candidates.next() {
+                let fut = get_gossip_from(client, candidate)
+                    .then(|result|
+                    {
+                        match result {
+                            Err(error) => {
+                                info!("candidate resolution error: {}", error);
+
+                                Ok(Loop::Continue(candidates))
+                            },
+
+                            Ok(members) => {
+                                if members.is_empty() {
+                                    Ok(Loop::Continue(candidates))
+                                } else {
+                                    Ok::<Loop<Option<u8>, std::vec::IntoIter<GossipSeed>>, io::Error>(Loop::Break(Some(1)))
+                                }
+                            }
+                        }
+                    });
+
+                boxed_future(fut)
+            } else {
+                boxed_future(future::ok(Loop::Break(None)))
+            }
+        });
 
         unimplemented!()
     }
