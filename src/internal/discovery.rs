@@ -6,7 +6,7 @@ use rand;
 use rand::seq::SliceRandom;
 use reqwest::async::Client;
 use serde::{ Deserialize, Serialize };
-use types::{ Endpoint, GossipSeed, ClusterSettings };
+use types::{ Endpoint, GossipSeed, ClusterSettings, NodePreference };
 use uuid::Uuid;
 
 pub struct StaticDiscovery {
@@ -62,8 +62,10 @@ struct MemberInfo {
     is_alive: bool,
     internal_tcp_ip: String,
     internal_tcp_port: u16,
+    internal_secure_tcp_port: u16,
     external_tcp_ip: String,
     external_tcp_port: u16,
+    external_secure_tcp_port: u16,
     internal_http_ip: String,
     internal_http_port: u16,
     external_http_ip: String,
@@ -80,8 +82,10 @@ struct MemberInfo {
 #[derive(Debug, Clone)]
 struct Member {
     external_tcp: SocketAddr,
+    external_secure_tcp: Option<SocketAddr>,
     external_http: SocketAddr,
     internal_tcp: SocketAddr,
+    internal_secure_tcp: Option<SocketAddr>,
     internal_http: SocketAddr,
     state: VNodeState,
 }
@@ -94,28 +98,52 @@ impl Member {
     fn from_member_info(info: MemberInfo) -> io::Result<Member> {
         let external_tcp =
             format!("{}:{}", info.external_tcp_ip, info.external_tcp_port)
-            .parse()
-            .map_err(addr_parse_error_to_io_error)?;
+                .parse()
+                .map_err(addr_parse_error_to_io_error)?;
+
+        let external_secure_tcp = {
+            if info.external_secure_tcp_port < 1 {
+                Ok(None)
+            } else {
+                format!("{}:{}", info.external_tcp_ip, info.external_secure_tcp_port)
+                    .parse()
+                    .map_err(addr_parse_error_to_io_error)
+                    .map(Some)
+            }
+        }?;
 
         let external_http =
             format!("{}:{}", info.external_http_ip, info.external_http_port)
-            .parse()
-            .map_err(addr_parse_error_to_io_error)?;
+                .parse()
+                .map_err(addr_parse_error_to_io_error)?;
 
         let internal_tcp =
             format!("{}:{}", info.internal_tcp_ip, info.internal_tcp_port)
-            .parse()
-            .map_err(addr_parse_error_to_io_error)?;
+                .parse()
+                .map_err(addr_parse_error_to_io_error)?;
+
+        let internal_secure_tcp = {
+            if info.internal_secure_tcp_port < 1 {
+                Ok(None)
+            } else {
+                format!("{}:{}", info.internal_tcp_ip, info.internal_secure_tcp_port)
+                    .parse()
+                    .map_err(addr_parse_error_to_io_error)
+                    .map(Some)
+            }
+        }?;
 
         let internal_http =
             format!("{}:{}", info.internal_http_ip, info.internal_http_port)
-            .parse()
-            .map_err(addr_parse_error_to_io_error)?;
+                .parse()
+                .map_err(addr_parse_error_to_io_error)?;
 
         let member = Member {
             external_tcp,
+            external_secure_tcp,
             external_http,
             internal_tcp,
+            internal_secure_tcp,
             internal_http,
             state: info.state,
         };
@@ -166,6 +194,7 @@ pub struct GossipSeedDiscovery {
     settings: ClusterSettings,
     client: reqwest::Client,
     previous_candidates: Option<Vec<Member>>,
+    preference: NodePreference,
 }
 
 impl GossipSeedDiscovery {
@@ -174,6 +203,7 @@ impl GossipSeedDiscovery {
             settings,
             client: reqwest::Client::new(),
             previous_candidates: None,
+            preference: NodePreference::Random,
         }
     }
 
@@ -236,6 +266,39 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
         })
 }
 
+fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
+    -> Option<Endpoint>
+{
+    fn allowed_states(state: VNodeState) -> bool {
+        match state {
+            VNodeState::Manager | VNodeState::ShuttingDown | VNodeState::Shutdown => false,
+            _ => true,
+        }
+    }
+
+    let mut members: Vec<MemberInfo> =
+        members.into_iter()
+            .filter(|member| allowed_states(member.state))
+            .collect();
+
+    members.as_mut_slice()
+        .sort_by(|a, b| a.state.cmp(&b.state));
+
+    {
+        let mut rng = rand::thread_rng();
+
+        if let NodePreference::Random = preference {
+            members.shuffle(&mut rng);
+        }
+
+        // TODO - Implement other node preferences.
+    };
+
+    let member = members.into_iter().next();
+
+    unimplemented!()
+}
+
 fn boxed_future<F: 'static>(future: F)
     -> Box<dyn Future<Item=F::Item, Error=F::Error>>
         where F: Future
@@ -263,11 +326,11 @@ impl Discovery for GossipSeedDiscovery {
 
             if let Some(candidate) = candidates.next() {
                 let fut = get_gossip_from(client, candidate)
-                    .then(|result|
+                    .then(move |result|
                     {
                         match result {
                             Err(error) => {
-                                info!("candidate resolution error: {}", error);
+                                info!("candidate [{}] resolution error: {}", candidate, error);
 
                                 Ok(Loop::Continue(candidates))
                             },

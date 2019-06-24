@@ -1490,6 +1490,18 @@ impl GossipSeed {
     }
 }
 
+/// Indicates which order of preferred nodes for connecting to.
+pub enum NodePreference {
+    /// When attempting connnection, prefers master node.
+    Master,
+
+    /// When attempting connnection, prefers slave node.
+    Slave,
+
+    /// When attempting connnection, has no node preference.
+    Random,
+}
+
 /// Contains settings related to a connection to a cluster.
 pub struct ClusterSettings {
     /// The maximum number of attempts for discovering endpoints.
