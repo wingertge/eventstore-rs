@@ -97,46 +97,34 @@ fn addr_parse_error_to_io_error(error: AddrParseError) -> io::Error {
 impl Member {
     fn from_member_info(info: MemberInfo) -> io::Result<Member> {
         let external_tcp =
-            format!("{}:{}", info.external_tcp_ip, info.external_tcp_port)
-                .parse()
-                .map_err(addr_parse_error_to_io_error)?;
+            parse_socket_addr(format!("{}:{}", info.external_tcp_ip, info.external_tcp_port))?;
 
         let external_secure_tcp = {
             if info.external_secure_tcp_port < 1 {
                 Ok(None)
             } else {
-                format!("{}:{}", info.external_tcp_ip, info.external_secure_tcp_port)
-                    .parse()
-                    .map_err(addr_parse_error_to_io_error)
+                parse_socket_addr(format!("{}:{}", info.external_tcp_ip, info.external_secure_tcp_port))
                     .map(Some)
             }
         }?;
 
         let external_http =
-            format!("{}:{}", info.external_http_ip, info.external_http_port)
-                .parse()
-                .map_err(addr_parse_error_to_io_error)?;
+            parse_socket_addr(format!("{}:{}", info.external_http_ip, info.external_http_port))?;
 
         let internal_tcp =
-            format!("{}:{}", info.internal_tcp_ip, info.internal_tcp_port)
-                .parse()
-                .map_err(addr_parse_error_to_io_error)?;
+            parse_socket_addr(format!("{}:{}", info.internal_tcp_ip, info.internal_tcp_port))?;
 
         let internal_secure_tcp = {
             if info.internal_secure_tcp_port < 1 {
                 Ok(None)
             } else {
-                format!("{}:{}", info.internal_tcp_ip, info.internal_secure_tcp_port)
-                    .parse()
-                    .map_err(addr_parse_error_to_io_error)
+                parse_socket_addr(format!("{}:{}", info.internal_tcp_ip, info.internal_secure_tcp_port))
                     .map(Some)
             }
         }?;
 
         let internal_http =
-            format!("{}:{}", info.internal_http_ip, info.internal_http_port)
-                .parse()
-                .map_err(addr_parse_error_to_io_error)?;
+            parse_socket_addr(format!("{}:{}", info.internal_http_ip, info.internal_http_port))?;
 
         let member = Member {
             external_tcp,
@@ -150,6 +138,11 @@ impl Member {
 
         Ok(member)
     }
+}
+
+fn parse_socket_addr(str_repr: String) -> io::Result<SocketAddr> {
+    str_repr.parse()
+        .map_err(addr_parse_error_to_io_error)
 }
 
 struct Candidates {
@@ -195,6 +188,11 @@ pub struct GossipSeedDiscovery {
     client: reqwest::Client,
     previous_candidates: Option<Vec<Member>>,
     preference: NodePreference,
+}
+
+pub(crate) struct NodeEndpoints {
+    pub tcp_endpoint: Endpoint,
+    pub secure_tcp_endpoint: Option<Endpoint>,
 }
 
 impl GossipSeedDiscovery {
@@ -267,7 +265,7 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
 }
 
 fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
-    -> Option<Endpoint>
+    -> io::Result<Option<NodeEndpoints>>
 {
     fn allowed_states(state: VNodeState) -> bool {
         match state {
@@ -294,9 +292,32 @@ fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
         // TODO - Implement other node preferences.
     };
 
-    let member = members.into_iter().next();
+    let member_opt = members.into_iter().next();
 
-    unimplemented!()
+    traverse_opt(member_opt, |member|
+    {
+        let addr =
+            parse_socket_addr(format!("{}:{}", member.external_tcp_ip, member.external_tcp_port))?;
+
+        let tcp_endpoint = Endpoint::from_addr(addr);
+
+        let secure_tcp_endpoint = {
+            if member.external_secure_tcp_port > 0 {
+                let mut secure_addr = addr.clone();
+
+                secure_addr.set_port(member.external_secure_tcp_port);
+
+                Some(Endpoint::from_addr(secure_addr))
+            } else {
+                None
+            }
+        };
+
+        Ok(NodeEndpoints {
+            tcp_endpoint,
+            secure_tcp_endpoint,
+        })
+    })
 }
 
 fn boxed_future<F: 'static>(future: F)
@@ -304,6 +325,22 @@ fn boxed_future<F: 'static>(future: F)
         where F: Future
 {
     Box::new(future)
+}
+
+
+fn traverse_opt<A, B, F>(option: Option<A>, f: F)
+    -> io::Result<Option<B>>
+        where F: FnOnce(A) -> io::Result<B>
+{
+    match option {
+        None => Ok(None),
+
+        Some(a) => {
+            let b = f(a)?;
+
+            Ok(Some(b))
+        },
+    }
 }
 
 impl Discovery for GossipSeedDiscovery {
