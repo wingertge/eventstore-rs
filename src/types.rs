@@ -1497,6 +1497,7 @@ impl GossipSeed {
 }
 
 /// Indicates which order of preferred nodes for connecting to.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum NodePreference {
     /// When attempting connnection, prefers master node.
     Master,
@@ -1506,6 +1507,18 @@ pub enum NodePreference {
 
     /// When attempting connnection, has no node preference.
     Random,
+}
+
+impl fmt::Display for NodePreference {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::NodePreference::*;
+
+        match self {
+            Master => write!(f, "Master"),
+            Slave => write!(f, "Slave"),
+            Random => write!(f, "Random"),
+        }
+    }
 }
 
 /// Contains settings related to a connection to a cluster.

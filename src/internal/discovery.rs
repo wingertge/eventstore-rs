@@ -60,17 +60,17 @@ impl fmt::Display for VNodeState {
         use self::VNodeState::*;
 
         match self {
-            Initializing => writeln!(f, "Initializing"),
-            Unknown => writeln!(f, "Unknown"),
-            PreReplica => writeln!(f, "PreReplica"),
-            CatchingUp => writeln!(f, "CatchingUp"),
-            Clone => writeln!(f, "Clone"),
-            Slave => writeln!(f, "Slave"),
-            PreMaster => writeln!(f, "PreMaster"),
-            Master => writeln!(f, "Master"),
-            Manager => writeln!(f, "Manager"),
-            ShuttingDown => writeln!(f, "ShuttingDown"),
-            Shutdown => writeln!(f, "Shutdown"),
+            Initializing => write!(f, "Initializing"),
+            Unknown => write!(f, "Unknown"),
+            PreReplica => write!(f, "PreReplica"),
+            CatchingUp => write!(f, "CatchingUp"),
+            Clone => write!(f, "Clone"),
+            Slave => write!(f, "Slave"),
+            PreMaster => write!(f, "PreMaster"),
+            Master => write!(f, "Master"),
+            Manager => write!(f, "Manager"),
+            ShuttingDown => write!(f, "ShuttingDown"),
+            Shutdown => write!(f, "Shutdown"),
         }
     }
 }
@@ -363,6 +363,7 @@ impl Discovery for GossipSeedDiscovery {
         };
 
         let cloned_client = self.client.clone();
+        let node_preference = self.preference;
 
         future::loop_fn(candidates.into_iter(), move |mut candidates|
         {
@@ -383,6 +384,7 @@ impl Discovery for GossipSeedDiscovery {
                                 if members.is_empty() {
                                     Ok(Loop::Continue(candidates))
                                 } else {
+                                    let node_opt = determine_best_node(node_preference, members)?;
                                     Ok::<Loop<Option<u8>, std::vec::IntoIter<GossipSeed>>, io::Error>(Loop::Break(Some(1)))
                                 }
                             }
