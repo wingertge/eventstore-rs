@@ -294,7 +294,7 @@ fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
 
     let member_opt = members.into_iter().next();
 
-    traverse_opt(member_opt, |member|
+    member_opt.map(|member|
     {
         let addr =
             parse_socket_addr(format!("{}:{}", member.external_tcp_ip, member.external_tcp_port))?;
@@ -317,7 +317,7 @@ fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
             tcp_endpoint,
             secure_tcp_endpoint,
         })
-    })
+    }).transpose()
 }
 
 fn boxed_future<F: 'static>(future: F)
@@ -325,22 +325,6 @@ fn boxed_future<F: 'static>(future: F)
         where F: Future
 {
     Box::new(future)
-}
-
-
-fn traverse_opt<A, B, F>(option: Option<A>, f: F)
-    -> io::Result<Option<B>>
-        where F: FnOnce(A) -> io::Result<B>
-{
-    match option {
-        None => Ok(None),
-
-        Some(a) => {
-            let b = f(a)?;
-
-            Ok(Some(b))
-        },
-    }
 }
 
 impl Discovery for GossipSeedDiscovery {
