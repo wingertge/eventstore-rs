@@ -1427,6 +1427,12 @@ pub struct Endpoint {
     pub addr: SocketAddr,
 }
 
+impl fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.addr)
+    }
+}
+
 impl Endpoint {
     pub(crate) fn from_addr(addr: SocketAddr) -> Endpoint {
         Endpoint {

@@ -1,4 +1,5 @@
 use std::net::{ SocketAddr, AddrParseError };
+use std::fmt;
 use std::io;
 use futures::{ IntoFuture, Future };
 use futures::future::{ self, FutureResult, Loop };
@@ -52,6 +53,26 @@ enum VNodeState {
     Manager,
     ShuttingDown,
     Shutdown,
+}
+
+impl fmt::Display for VNodeState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::VNodeState::*;
+
+        match self {
+            Initializing => writeln!(f, "Initializing"),
+            Unknown => writeln!(f, "Unknown"),
+            PreReplica => writeln!(f, "PreReplica"),
+            CatchingUp => writeln!(f, "CatchingUp"),
+            Clone => writeln!(f, "Clone"),
+            Slave => writeln!(f, "Slave"),
+            PreMaster => writeln!(f, "PreMaster"),
+            Master => writeln!(f, "Master"),
+            Manager => writeln!(f, "Manager"),
+            ShuttingDown => writeln!(f, "ShuttingDown"),
+            Shutdown => writeln!(f, "Shutdown"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -264,7 +285,7 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
         })
 }
 
-fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
+fn determine_best_node(preference: NodePreference, members: Vec<MemberInfo>)
     -> io::Result<Option<NodeEndpoints>>
 {
     fn allowed_states(state: VNodeState) -> bool {
@@ -312,6 +333,8 @@ fn determine_best_node(preference: NodePreference, mut members: Vec<MemberInfo>)
                 None
             }
         };
+
+        info!("Discovering: found best choice [{},{:?}] ({})", tcp_endpoint, secure_tcp_endpoint, member.state);
 
         Ok(NodeEndpoints {
             tcp_endpoint,
