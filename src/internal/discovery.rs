@@ -1,6 +1,7 @@
 use std::net::{ SocketAddr, AddrParseError };
 use std::fmt;
 use std::io;
+use std::vec::IntoIter;
 use futures::{ IntoFuture, Future };
 use futures::future::{ self, FutureResult, Loop };
 use rand;
@@ -285,7 +286,7 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
         })
 }
 
-fn determine_best_node(preference: NodePreference, members: Vec<MemberInfo>)
+fn determine_best_node(preference: NodePreference, members: &[MemberInfo])
     -> io::Result<Option<NodeEndpoints>>
 {
     fn allowed_states(state: VNodeState) -> bool {
@@ -295,8 +296,8 @@ fn determine_best_node(preference: NodePreference, members: Vec<MemberInfo>)
         }
     }
 
-    let mut members: Vec<MemberInfo> =
-        members.into_iter()
+    let mut members: Vec<&MemberInfo> =
+        members.iter()
             .filter(|member| allowed_states(member.state))
             .collect();
 
@@ -350,6 +351,24 @@ fn boxed_future<F: 'static>(future: F)
     Box::new(future)
 }
 
+struct DiscoveryState {
+    candidates: IntoIter<GossipSeed>,
+    members: Option<Vec<MemberInfo>>,
+}
+
+impl DiscoveryState {
+    fn new(candidates: IntoIter<GossipSeed>) -> DiscoveryState {
+        DiscoveryState {
+            candidates,
+            members: None,
+        }
+    }
+
+    fn deque_candidate(&mut self) -> Option<GossipSeed> {
+        self.candidates.next()
+    }
+}
+
 impl Discovery for GossipSeedDiscovery {
     fn discover(&mut self, last: Option<&Endpoint>)
         -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>
@@ -364,12 +383,13 @@ impl Discovery for GossipSeedDiscovery {
 
         let cloned_client = self.client.clone();
         let node_preference = self.preference;
+        let initial = DiscoveryState::new(candidates.into_iter());
 
-        future::loop_fn(candidates.into_iter(), move |mut candidates|
+        future::loop_fn(initial, move |mut state|
         {
             let client = cloned_client.clone();
 
-            if let Some(candidate) = candidates.next() {
+            if let Some(candidate) = state.deque_candidate() {
                 let fut = get_gossip_from(client, candidate)
                     .then(move |result|
                     {
@@ -377,15 +397,15 @@ impl Discovery for GossipSeedDiscovery {
                             Err(error) => {
                                 info!("candidate [{}] resolution error: {}", candidate, error);
 
-                                Ok(Loop::Continue(candidates))
+                                Ok(Loop::Continue(state))
                             },
 
                             Ok(members) => {
                                 if members.is_empty() {
-                                    Ok(Loop::Continue(candidates))
+                                    Ok(Loop::Continue(state))
                                 } else {
-                                    let node_opt = determine_best_node(node_preference, members)?;
-                                    Ok::<Loop<Option<u8>, std::vec::IntoIter<GossipSeed>>, io::Error>(Loop::Break(Some(1)))
+                                    let node_opt = determine_best_node(node_preference, members.as_slice())?;
+                                    Ok::<Loop<Option<u8>, DiscoveryState>, io::Error>(Loop::Break(Some(1)))
                                 }
                             }
                         }
