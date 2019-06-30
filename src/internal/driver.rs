@@ -1,5 +1,5 @@
 use core::option::Option;
-use std::io::{ Error, ErrorKind };
+use std::io::{ self, Error, ErrorKind };
 use std::time::{ Duration, Instant };
 
 use futures::{ Future, Stream, Sink };
@@ -154,8 +154,7 @@ pub(crate) enum Report {
     Quit,
 }
 
-pub(crate) struct Driver<D> where D: Discovery
-{
+pub(crate) struct Driver {
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
@@ -163,7 +162,7 @@ pub(crate) struct Driver<D> where D: Discovery
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: D,
+    discovery: Option<Discovery>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -175,10 +174,9 @@ pub(crate) struct Driver<D> where D: Discovery
     last_operation_check: Instant,
 }
 
-impl<D> Driver<D> where D: Discovery
-{
-    pub(crate) fn new(setts: &Settings, disc: D, sender: Sender<Msg>)
-        -> Driver<D>
+impl Driver {
+    pub(crate) fn new(setts: &Settings, disc: Discovery, sender: Sender<Msg>)
+        -> Driver
     {
         Driver {
             registry: Registry::new(),
@@ -188,7 +186,7 @@ impl<D> Driver<D> where D: Discovery
             state: ConnectionState::Init,
             phase: Phase::Reconnecting,
             last_endpoint: None,
-            discovery: disc,
+            discovery: Some(Box::new(disc)),
             connection_name: setts.connection_name.clone(),
             default_user: setts.default_user.clone(),
             operation_timeout: setts.operation_timeout,
@@ -220,30 +218,34 @@ impl<D> Driver<D> where D: Discovery
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
-            let future = self.discovery.discover(self.last_endpoint.as_ref());
             let sender = self.sender.clone();
 
-            let future =
-                future.then(move |result|
-                {
-                    let next = match result {
-                        Ok(endpoint) =>
-                            sender.clone().send(Msg::Establish(endpoint)),
+            if let Some(disc_stream) = self.discovery.take() {
+                let future =
+                    disc_stream.then(move |result|
+                    {
+                        let next = match result {
+                            Ok(endpoint, next_stream) =>
+                                sender.clone().send(Msg::Establish(next_stream, endpoint)),
 
-                        Err(e) => {
-                            error!("Failed to resolve TCP endpoint to which to connect {}.", e);
-                            sender.clone().send(Msg::ConnectionClosed(Uuid::nil(), e))
-                        }
-                    };
+                            Err(e, next_stream) => {
+                                error!("Failed to resolve TCP endpoint to which to connect {}.", e);
+                                sender.clone().send(Msg::DiscoveryError(next_stream, e))
+                            }
+                        };
 
-                    next.then(|_| Ok(()))
-                 });
+                        next.then(|_| Ok(()))
+                    });
 
-            self.phase = Phase::EndpointDiscovery;
+                self.phase = Phase::EndpointDiscovery;
 
-            spawn(future);
+                spawn(future);
 
-            self.tracker.reset();
+                self.tracker.reset();
+            } else {
+                error!("Impossible happened! Enterirng discovery phase without a discovery stream available.");
+                spawn(sender.send(Msg::Shutdown).map_err(|_| ()));
+            }
         }
     }
 

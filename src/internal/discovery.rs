@@ -4,6 +4,7 @@ use std::io;
 use std::vec::IntoIter;
 use futures::{ IntoFuture, Future };
 use futures::future::{ self, FutureResult, Loop };
+use futures::stream::{ self, Stream };
 use rand;
 use rand::seq::SliceRandom;
 use reqwest::async::Client;
@@ -12,32 +13,52 @@ use types::{ Endpoint, GossipSeed, ClusterSettings, NodePreference };
 use uuid::Uuid;
 
 pub struct StaticDiscovery {
-    addr: SocketAddr,
+    endpoint: Endpoint,
 }
 
-impl Discovery for StaticDiscovery {
-    fn discover(&mut self, _: Option<&Endpoint>)
-        -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>
+pub struct Discovery(FnOnce() -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>);
+
+impl Discovery {
+    pub fn execute(self)
+        -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
     {
-        let endpoint = Endpoint {
-            addr: self.addr,
-        };
-
-        Box::new(future::ok(endpoint))
-    }
-}
-
-impl StaticDiscovery {
-    pub fn new(addr: SocketAddr) -> StaticDiscovery {
-        StaticDiscovery {
-            addr,
+        match self {
+            Discovery(action) => action(),
         }
     }
-}
 
-pub trait Discovery {
-    fn discover(&mut self, last: Option<&Endpoint>)
-        -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>;
+    pub fn iterate<S, F>(seed: S, iteratee: F)
+        -> Discovery
+            where F: Fn(S) -> Box<dyn Future<Item=(Endpoint, S), Error=(io::Error, S)>>
+    {
+        fn go<S, F>(state: S, iteratee: F)
+            -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
+                where F: Fn(S) -> Box<dyn Future<Item=(Endpoint, S), Error=(io::Error, S)>>
+        {
+            let fut = iteratee(state).then(|result|
+            {
+                match result {
+                    Ok((endpoint, next)) =>
+                        future::result(Ok((endpoint, Discovery(|| go(next, iteratee))))),
+
+                    Err((e, next)) =>
+                        future::result(Err((e, Discovery(|| go(next, iteratee))))),
+                }
+            });
+
+            Box::new(fut)
+        }
+
+        Discovery(|| go(seed, iteratee))
+    }
+
+    pub fn static_endpoint(endpoint: Endpoint) -> Discovery {
+        fn go(endpoint: Endpoint)
+            -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
+        {
+            future::ok((endpoint, Discovery(|| go(endpoint))))
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Copy, Clone)]
@@ -369,54 +390,54 @@ impl DiscoveryState {
     }
 }
 
-impl Discovery for GossipSeedDiscovery {
-    fn discover(&mut self, last: Option<&Endpoint>)
-        -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>
-    {
-        let candidates = match self.previous_candidates.take() {
-            Some(old_candidates) =>
-                self.candidates_from_old_gossip(last, old_candidates),
+// impl Discovery for GossipSeedDiscovery {
+//     fn discover(&mut self, last: Option<&Endpoint>)
+//         -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>
+//     {
+//         let candidates = match self.previous_candidates.take() {
+//             Some(old_candidates) =>
+//                 self.candidates_from_old_gossip(last, old_candidates),
 
-            None =>
-                self.candidates_from_dns(),
-        };
+//             None =>
+//                 self.candidates_from_dns(),
+//         };
 
-        let cloned_client = self.client.clone();
-        let node_preference = self.preference;
-        let initial = DiscoveryState::new(candidates.into_iter());
+//         let cloned_client = self.client.clone();
+//         let node_preference = self.preference;
+//         let initial = DiscoveryState::new(candidates.into_iter());
 
-        future::loop_fn(initial, move |mut state|
-        {
-            let client = cloned_client.clone();
+//         future::loop_fn(initial, move |mut state|
+//         {
+//             let client = cloned_client.clone();
 
-            if let Some(candidate) = state.deque_candidate() {
-                let fut = get_gossip_from(client, candidate)
-                    .then(move |result|
-                    {
-                        match result {
-                            Err(error) => {
-                                info!("candidate [{}] resolution error: {}", candidate, error);
+//             if let Some(candidate) = state.deque_candidate() {
+//                 let fut = get_gossip_from(client, candidate)
+//                     .then(move |result|
+//                     {
+//                         match result {
+//                             Err(error) => {
+//                                 info!("candidate [{}] resolution error: {}", candidate, error);
 
-                                Ok(Loop::Continue(state))
-                            },
+//                                 Ok(Loop::Continue(state))
+//                             },
 
-                            Ok(members) => {
-                                if members.is_empty() {
-                                    Ok(Loop::Continue(state))
-                                } else {
-                                    let node_opt = determine_best_node(node_preference, members.as_slice())?;
-                                    Ok::<Loop<Option<u8>, DiscoveryState>, io::Error>(Loop::Break(Some(1)))
-                                }
-                            }
-                        }
-                    });
+//                             Ok(members) => {
+//                                 if members.is_empty() {
+//                                     Ok(Loop::Continue(state))
+//                                 } else {
+//                                     let node_opt = determine_best_node(node_preference, members.as_slice())?;
+//                                     Ok::<Loop<Option<u8>, DiscoveryState>, io::Error>(Loop::Break(Some(1)))
+//                                 }
+//                             }
+//                         }
+//                     });
 
-                boxed_future(fut)
-            } else {
-                boxed_future(future::ok(Loop::Break(None)))
-            }
-        });
+//                 boxed_future(fut)
+//             } else {
+//                 boxed_future(future::ok(Loop::Break(None)))
+//             }
+//         });
 
-        unimplemented!()
-    }
-}
+//         unimplemented!()
+//     }
+// }

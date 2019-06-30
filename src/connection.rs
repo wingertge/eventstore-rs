@@ -7,7 +7,7 @@ use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
-use internal::discovery::Discovery;
+use internal::discovery::{ self, Discovery };
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
 use internal::commands;
@@ -133,18 +133,16 @@ impl ConnectionBuilder {
 
 const DEFAULT_BOX_SIZE: usize = 500;
 
-fn connection_state_machine<D>(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver<D>)
+fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
     -> impl Future<Item=(), Error=()>
-    where D: Discovery
 {
     enum State {
         Live,
         Clearing,
     }
 
-    fn start_closing<D, E>(sender: &Sender<Msg>, driver: &mut Driver<D>)
+    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver)
         -> Result<State, E>
-        where D: Discovery
     {
         driver.close_connection();
 
