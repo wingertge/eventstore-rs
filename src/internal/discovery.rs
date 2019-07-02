@@ -2,63 +2,49 @@ use std::net::{ SocketAddr, AddrParseError };
 use std::fmt;
 use std::io;
 use std::vec::IntoIter;
-use futures::{ IntoFuture, Future };
+use futures::{ IntoFuture, Future, Sink };
 use futures::future::{ self, FutureResult, Loop };
 use futures::stream::{ self, Stream };
+use futures::sync::mpsc;
 use rand;
 use rand::seq::SliceRandom;
 use reqwest::async::Client;
 use serde::{ Deserialize, Serialize };
 use types::{ Endpoint, GossipSeed, ClusterSettings, NodePreference };
 use uuid::Uuid;
+use internal::messaging::Msg;
+use tokio::spawn;
 
 pub struct StaticDiscovery {
     endpoint: Endpoint,
 }
 
-pub struct Discovery(FnOnce() -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>);
+pub(crate) fn static_discovery(consumer: mpsc::Receiver<()>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)
+    -> impl Future<Item=(), Error=()>
+{
+    struct State {
+        sender: mpsc::Sender<Msg>,
+        endpoint: Endpoint,
+    }
 
-impl Discovery {
-    pub fn execute(self)
-        -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
+    let initial =
+        State {
+            sender,
+            endpoint,
+        };
+
+    consumer.fold(initial, |state, _|
     {
-        match self {
-            Discovery(action) => action(),
-        }
-    }
+        let send_endpoint =
+            state.sender
+                .clone()
+                .send(Msg::Establish(state.endpoint))
+                .then(|_| Ok(()));
 
-    pub fn iterate<S, F>(seed: S, iteratee: F)
-        -> Discovery
-            where F: Fn(S) -> Box<dyn Future<Item=(Endpoint, S), Error=(io::Error, S)>>
-    {
-        fn go<S, F>(state: S, iteratee: F)
-            -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
-                where F: Fn(S) -> Box<dyn Future<Item=(Endpoint, S), Error=(io::Error, S)>>
-        {
-            let fut = iteratee(state).then(|result|
-            {
-                match result {
-                    Ok((endpoint, next)) =>
-                        future::result(Ok((endpoint, Discovery(|| go(next, iteratee))))),
+        spawn(send_endpoint);
 
-                    Err((e, next)) =>
-                        future::result(Err((e, Discovery(|| go(next, iteratee))))),
-                }
-            });
-
-            Box::new(fut)
-        }
-
-        Discovery(|| go(seed, iteratee))
-    }
-
-    pub fn static_endpoint(endpoint: Endpoint) -> Discovery {
-        fn go(endpoint: Endpoint)
-            -> Box<dyn Future<Item=(Endpoint, Discovery), Error=(io::Error, Discovery)>>
-        {
-            future::ok((endpoint, Discovery(|| go(endpoint))))
-        }
-    }
+        future::ok(state)
+    }).map(|_| ())
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Copy, Clone)]

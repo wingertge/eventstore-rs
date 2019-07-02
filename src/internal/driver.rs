@@ -8,7 +8,6 @@ use tokio::spawn;
 use tokio::timer::Interval;
 use uuid::Uuid;
 
-use internal::discovery::Discovery;
 use internal::command::Cmd;
 use internal::connection::Connection;
 use internal::messaging::Msg;
@@ -162,7 +161,7 @@ pub(crate) struct Driver {
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: Option<Discovery>,
+    discovery: Sender<()>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -175,7 +174,7 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    pub(crate) fn new(setts: &Settings, disc: Discovery, sender: Sender<Msg>)
+    pub(crate) fn new(setts: &Settings, discovery: Sender<()>, sender: Sender<Msg>)
         -> Driver
     {
         Driver {
@@ -186,7 +185,7 @@ impl Driver {
             state: ConnectionState::Init,
             phase: Phase::Reconnecting,
             last_endpoint: None,
-            discovery: Some(Box::new(disc)),
+            discovery,
             connection_name: setts.connection_name.clone(),
             default_user: setts.default_user.clone(),
             operation_timeout: setts.operation_timeout,
@@ -218,34 +217,15 @@ impl Driver {
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
-            let sender = self.sender.clone();
+            let start_discovery =
+                self.discovery
+                    .clone()
+                    .send(())
+                    .then(|_| Ok(()));
 
-            if let Some(disc_stream) = self.discovery.take() {
-                let future =
-                    disc_stream.then(move |result|
-                    {
-                        let next = match result {
-                            Ok(endpoint, next_stream) =>
-                                sender.clone().send(Msg::Establish(next_stream, endpoint)),
+            self.phase = Phase::EndpointDiscovery;
 
-                            Err(e, next_stream) => {
-                                error!("Failed to resolve TCP endpoint to which to connect {}.", e);
-                                sender.clone().send(Msg::DiscoveryError(next_stream, e))
-                            }
-                        };
-
-                        next.then(|_| Ok(()))
-                    });
-
-                self.phase = Phase::EndpointDiscovery;
-
-                spawn(future);
-
-                self.tracker.reset();
-            } else {
-                error!("Impossible happened! Enterirng discovery phase without a discovery stream available.");
-                spawn(sender.send(Msg::Shutdown).map_err(|_| ()));
-            }
+            spawn(start_discovery);
         }
     }
 

@@ -7,7 +7,7 @@ use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
-use internal::discovery::{ self, Discovery };
+use internal::discovery;
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
 use internal::commands;
@@ -171,6 +171,10 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                 Msg::NewOp(op) => driver.on_new_op(op),
                 Msg::Send(pkg) => driver.on_send_pkg(pkg),
 
+                Msg::DiscoveryError(e) => {
+                    error!("Failed to resolve TCP endpoint to which to connect: {}", e);
+                },
+
                 Msg::Tick => {
                     if let Report::Quit = driver.on_tick() {
                         return start_closing(&sender, &mut driver);
@@ -239,11 +243,16 @@ impl Connection {
 
     fn initialize(settings: &Settings, addr: SocketAddr, runtime: &mut Runtime) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
-        let disc = StaticDiscovery::new(addr);
+        let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
-        let driver = Driver::new(&settings, disc, sender.clone());
+        let driver = Driver::new(&settings, start_discovery, sender.clone());
+        let endpoint = types::Endpoint::from_addr(addr);
+        let discovery = discovery::static_discovery(run_discovery, sender.clone(), endpoint);
         let action = connection_state_machine(cloned_sender, recv, driver);
+
+        let _ = runtime.spawn(discovery);
         let _ = runtime.spawn(action);
+
         sender
     }
 
