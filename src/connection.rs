@@ -171,10 +171,6 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                 Msg::NewOp(op) => driver.on_new_op(op),
                 Msg::Send(pkg) => driver.on_send_pkg(pkg),
 
-                Msg::DiscoveryError(e) => {
-                    error!("Failed to resolve TCP endpoint to which to connect: {}", e);
-                },
-
                 Msg::Tick => {
                     if let Report::Quit = driver.on_tick() {
                         return start_closing(&sender, &mut driver);

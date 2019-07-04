@@ -1,6 +1,7 @@
 use std::net::{ SocketAddr, AddrParseError };
 use std::fmt;
 use std::io;
+use std::iter::FromIterator;
 use std::vec::IntoIter;
 use futures::{ IntoFuture, Future, Sink };
 use futures::future::{ self, FutureResult, Loop };
@@ -19,7 +20,7 @@ pub struct StaticDiscovery {
     endpoint: Endpoint,
 }
 
-pub(crate) fn static_discovery(consumer: mpsc::Receiver<()>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)
+pub(crate) fn static_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)
     -> impl Future<Item=(), Error=()>
 {
     struct State {
@@ -45,6 +46,145 @@ pub(crate) fn static_discovery(consumer: mpsc::Receiver<()>, sender: mpsc::Sende
 
         future::ok(state)
     }).map(|_| ())
+}
+
+pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: ClusterSettings)
+    -> impl Future<Item=(), Error=()>
+{
+    struct State {
+        settings: ClusterSettings,
+        client: reqwest::Client,
+        previous_candidates: Option<Vec<Member>>,
+        preference: NodePreference,
+        sender: mpsc::Sender<Msg>,
+        candidates: IntoIter<GossipSeed>,
+    }
+
+    let initial =
+        State {
+            settings,
+            sender,
+            client: reqwest::Client::new(),
+            previous_candidates: None,
+            preference: NodePreference::Random,
+            candidates: vec![].into_iter(),
+        };
+
+    consumer.fold(initial, |mut state, failed_endpoint|
+    {
+
+        let candidates = match state.previous_candidates.take() {
+            Some(old_candidates) =>
+                candidates_from_old_gossip(failed_endpoint, old_candidates),
+
+            None =>
+                candidates_from_dns(&state.settings),
+        };
+
+        state.candidates = candidates.into_iter();
+
+        let action = future::loop_fn(state, move |mut state|
+        {
+            let client = state.client.clone();
+
+            if let Some(candidate) = state.candidates.next() {
+                let fut = get_gossip_from(client, candidate)
+                    .then(move |result|
+                    {
+                        let result: io::Result<Vec<Member>> = result.and_then(|member_info|
+                        {
+                            let members: Vec<io::Result<Member>> =
+                                member_info
+                                    .into_iter()
+                                    .map(Member::from_member_info)
+                                    .collect();
+
+                            Result::from_iter(members)
+                        });
+
+                        match result {
+                            Err(error) => {
+                                info!("candidate [{}] resolution error: {}", candidate, error);
+
+                                Ok(Loop::Continue(state))
+                            },
+
+                            Ok(members) => {
+                                if members.is_empty() {
+                                    Ok(Loop::Continue(state))
+                                } else {
+                                    let node_opt = determine_best_node(state.preference, members.as_slice());
+
+                                    if node_opt.is_some() {
+                                        state.previous_candidates = Some(members);
+                                    }
+
+                                    Ok(Loop::Break((node_opt, state)))
+                                }
+                            }
+                        }
+                    });
+
+                boxed_future(fut)
+            } else {
+                boxed_future(future::ok(Loop::Break((None, state))))
+            }
+        });
+
+        action.map(|(node_opt, state)|
+        {
+            if let Some(node) = node_opt {
+                let send_endpoint =
+                    state.sender
+                        .clone()
+                        .send(Msg::Establish(node.tcp_endpoint))
+                        .then(|_| Ok(()));
+
+                spawn(send_endpoint);
+            }
+
+            state
+        })
+    }).map(|_| ())
+}
+
+fn candidates_from_dns(settings: &ClusterSettings) -> Vec<GossipSeed> {
+    // TODO - Currently we only shuffling from the initial seed list.
+    // Later on, we will also try to get candidates from the DNS server
+    // itself.
+    let mut rng = rand::thread_rng();
+    let mut src = settings.seeds.clone();
+
+    src.shuffle(&mut rng);
+    src.into_vec()
+}
+
+fn candidates_from_old_gossip(failed_endpoint: Option<Endpoint>, old_candidates: Vec<Member>)
+    -> Vec<GossipSeed>
+{
+    let candidates = match failed_endpoint {
+        Some(endpoint) => {
+            old_candidates
+                .into_iter()
+                .filter(|member| member.external_tcp != endpoint.addr)
+                .collect()
+        },
+
+        None => old_candidates,
+    };
+
+    arrange_gossip_candidates(candidates)
+}
+
+fn arrange_gossip_candidates(candidates: Vec<Member>) -> Vec<GossipSeed> {
+    let mut arranged_candidates = Candidates::new();
+
+    for member in candidates {
+        arranged_candidates.push(member);
+    }
+
+    arranged_candidates.shuffle();
+    arranged_candidates.gossip_seeds()
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Copy, Clone)]
@@ -212,66 +352,9 @@ impl Candidates {
     }
 }
 
-pub struct GossipSeedDiscovery {
-    settings: ClusterSettings,
-    client: reqwest::Client,
-    previous_candidates: Option<Vec<Member>>,
-    preference: NodePreference,
-}
-
 pub(crate) struct NodeEndpoints {
     pub tcp_endpoint: Endpoint,
     pub secure_tcp_endpoint: Option<Endpoint>,
-}
-
-impl GossipSeedDiscovery {
-    pub(crate) fn new(settings: ClusterSettings) -> GossipSeedDiscovery {
-        GossipSeedDiscovery {
-            settings,
-            client: reqwest::Client::new(),
-            previous_candidates: None,
-            preference: NodePreference::Random,
-        }
-    }
-
-    fn candidates_from_dns(&self) -> Vec<GossipSeed> {
-        // TODO - Currently we only shuffling from the initial seed list.
-        // Later on, we will also try to get candidates from the DNS server
-        // itself.
-        let mut rng = rand::thread_rng();
-        let mut src = self.settings.seeds.clone();
-
-        src.shuffle(&mut rng);
-        src.into_vec()
-    }
-
-    fn candidates_from_old_gossip(&self, failed_endpoint: Option<&Endpoint>, old_candidates: Vec<Member>)
-        -> Vec<GossipSeed>
-    {
-        let candidates = match failed_endpoint {
-            Some(endpoint) => {
-                old_candidates
-                    .into_iter()
-                    .filter(|member| member.external_tcp != endpoint.addr)
-                    .collect()
-            },
-
-            None => old_candidates,
-        };
-
-        self.arrange_gossip_candidates(candidates)
-    }
-
-    fn arrange_gossip_candidates(&self, candidates: Vec<Member>) -> Vec<GossipSeed> {
-        let mut arranged_candidates = Candidates::new();
-
-        for member in candidates {
-            arranged_candidates.push(member);
-        }
-
-        arranged_candidates.shuffle();
-        arranged_candidates.gossip_seeds()
-    }
 }
 
 fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
@@ -293,8 +376,8 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
         })
 }
 
-fn determine_best_node(preference: NodePreference, members: &[MemberInfo])
-    -> io::Result<Option<NodeEndpoints>>
+fn determine_best_node(preference: NodePreference, members: &[Member])
+    -> Option<NodeEndpoints>
 {
     fn allowed_states(state: VNodeState) -> bool {
         match state {
@@ -303,7 +386,7 @@ fn determine_best_node(preference: NodePreference, members: &[MemberInfo])
         }
     }
 
-    let mut members: Vec<&MemberInfo> =
+    let mut members: Vec<&Member> =
         members.iter()
             .filter(|member| allowed_states(member.state))
             .collect();
@@ -325,30 +408,15 @@ fn determine_best_node(preference: NodePreference, members: &[MemberInfo])
 
     member_opt.map(|member|
     {
-        let addr =
-            parse_socket_addr(format!("{}:{}", member.external_tcp_ip, member.external_tcp_port))?;
+        info!("Discovering: found best choice [{},{:?}] ({})", member.external_tcp, member.external_secure_tcp, member.state);
 
-        let tcp_endpoint = Endpoint::from_addr(addr);
-
-        let secure_tcp_endpoint = {
-            if member.external_secure_tcp_port > 0 {
-                let mut secure_addr = addr.clone();
-
-                secure_addr.set_port(member.external_secure_tcp_port);
-
-                Some(Endpoint::from_addr(secure_addr))
-            } else {
-                None
-            }
+        let node = NodeEndpoints {
+            tcp_endpoint: Endpoint::from_addr(member.external_tcp),
+            secure_tcp_endpoint: member.external_secure_tcp.map(Endpoint::from_addr),
         };
 
-        info!("Discovering: found best choice [{},{:?}] ({})", tcp_endpoint, secure_tcp_endpoint, member.state);
-
-        Ok(NodeEndpoints {
-            tcp_endpoint,
-            secure_tcp_endpoint,
-        })
-    }).transpose()
+        node
+    })
 }
 
 fn boxed_future<F: 'static>(future: F)
@@ -357,73 +425,3 @@ fn boxed_future<F: 'static>(future: F)
 {
     Box::new(future)
 }
-
-struct DiscoveryState {
-    candidates: IntoIter<GossipSeed>,
-    members: Option<Vec<MemberInfo>>,
-}
-
-impl DiscoveryState {
-    fn new(candidates: IntoIter<GossipSeed>) -> DiscoveryState {
-        DiscoveryState {
-            candidates,
-            members: None,
-        }
-    }
-
-    fn deque_candidate(&mut self) -> Option<GossipSeed> {
-        self.candidates.next()
-    }
-}
-
-// impl Discovery for GossipSeedDiscovery {
-//     fn discover(&mut self, last: Option<&Endpoint>)
-//         -> Box<dyn Future<Item=Endpoint, Error=io::Error> + Send>
-//     {
-//         let candidates = match self.previous_candidates.take() {
-//             Some(old_candidates) =>
-//                 self.candidates_from_old_gossip(last, old_candidates),
-
-//             None =>
-//                 self.candidates_from_dns(),
-//         };
-
-//         let cloned_client = self.client.clone();
-//         let node_preference = self.preference;
-//         let initial = DiscoveryState::new(candidates.into_iter());
-
-//         future::loop_fn(initial, move |mut state|
-//         {
-//             let client = cloned_client.clone();
-
-//             if let Some(candidate) = state.deque_candidate() {
-//                 let fut = get_gossip_from(client, candidate)
-//                     .then(move |result|
-//                     {
-//                         match result {
-//                             Err(error) => {
-//                                 info!("candidate [{}] resolution error: {}", candidate, error);
-
-//                                 Ok(Loop::Continue(state))
-//                             },
-
-//                             Ok(members) => {
-//                                 if members.is_empty() {
-//                                     Ok(Loop::Continue(state))
-//                                 } else {
-//                                     let node_opt = determine_best_node(node_preference, members.as_slice())?;
-//                                     Ok::<Loop<Option<u8>, DiscoveryState>, io::Error>(Loop::Break(Some(1)))
-//                                 }
-//                             }
-//                         }
-//                     });
-
-//                 boxed_future(fut)
-//             } else {
-//                 boxed_future(future::ok(Loop::Break(None)))
-//             }
-//         });
-
-//         unimplemented!()
-//     }
-// }

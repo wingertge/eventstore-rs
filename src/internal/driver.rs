@@ -161,7 +161,7 @@ pub(crate) struct Driver {
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: Sender<()>,
+    discovery: Sender<Option<Endpoint>>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -174,7 +174,7 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    pub(crate) fn new(setts: &Settings, discovery: Sender<()>, sender: Sender<Msg>)
+    pub(crate) fn new(setts: &Settings, discovery: Sender<Option<Endpoint>>, sender: Sender<Msg>)
         -> Driver
     {
         Driver {
@@ -217,10 +217,11 @@ impl Driver {
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
+            let failed_endpoint = self.last_endpoint.take();
             let start_discovery =
                 self.discovery
                     .clone()
-                    .send(())
+                    .send(failed_endpoint)
                     .then(|_| Ok(()));
 
             self.phase = Phase::EndpointDiscovery;

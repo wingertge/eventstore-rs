@@ -13,7 +13,6 @@ pub(crate) enum Msg {
     Established(Uuid),
     Arrived(Pkg),
     ConnectionClosed(Uuid, Error),
-    DiscoveryError(Error),
     NewOp(operations::OperationWrapper),
     Send(Pkg),
     Marker, // Use as checkpoint detection.
