@@ -3,7 +3,7 @@ use std::io;
 use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Receiver, Sender, channel };
+use futures::sync::mpsc::{ self, Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
@@ -11,7 +11,6 @@ use internal::discovery;
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
 use internal::commands;
-use internal::discovery::StaticDiscovery;
 use internal::operations::OperationError;
 use types::{ self, StreamMetadata, Settings };
 
@@ -93,14 +92,15 @@ impl ConnectionBuilder {
     /// Creates a connection to an EventStore server. The connection will
     /// start right away. This method will pick the first `SocketAddr` it
     /// has resolved.
-    pub fn start<A>(self, addrs: A) -> io::Result<Connection>
+    pub fn connect_to_static_node<A>(self, addrs: A) -> io::Result<Connection>
         where
             A: ToSocketAddrs
     {
         let mut iter = addrs.to_socket_addrs()?;
 
         if let Some(addr) = iter.next() {
-            let client = Connection::new(self.settings, addr);
+            let discovery = StaticSocketAddr(addr);
+            let client = Connection::new(self.settings, discovery);
 
             client.start();
 
@@ -113,14 +113,15 @@ impl ConnectionBuilder {
     /// Creates a connection to an EventStore server. The connection will
     /// start right away. This method will pick the first `SocketAddr` it
     /// has resolved.
-    pub fn start_with_runtime<A>(self, addrs: A, runtime: &mut Runtime) -> io::Result<Connection>
+    pub fn connect_to_static_node_with_runtime<A>(self, addrs: A, runtime: &mut Runtime) -> io::Result<Connection>
         where
             A: ToSocketAddrs
     {
         let mut iter = addrs.to_socket_addrs()?;
 
         if let Some(addr) = iter.next() {
-            let client = Connection::with_runtime(self.settings, addr, runtime);
+            let discovery = StaticSocketAddr(addr);
+            let client = Connection::with_runtime(self.settings, runtime, discovery);
 
             client.start();
 
@@ -128,6 +129,55 @@ impl ConnectionBuilder {
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
         }
+    }
+
+    /// Creates a connection to a cluster of EventStore nodes. The connection will
+    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
+    /// of a node. The standard external HTTP endpoint is running on `2113`.
+    pub fn connect_to_cluster_through_gossip(self, settings: types::GossipSeedClusterSettings)
+        -> Connection
+    {
+        let discovery = GossipDiscovery(settings);
+
+        Connection::new(self.settings, discovery)
+    }
+
+    /// Creates a connection to a cluster of EventStore nodes. The connection will
+    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
+    /// of a node. The standard external HTTP endpoint is running on `2113`.
+    pub fn connect_to_cluster_through_gossip_with_runtime(self, settings: types::GossipSeedClusterSettings, runtime: &mut Runtime)
+        -> Connection
+    {
+        let discovery = GossipDiscovery(settings);
+
+        Connection::with_runtime(self.settings, runtime, discovery)
+    }
+}
+
+trait DiscoveryProcess {
+    fn start_discovery(self, &mut Runtime, mpsc::Receiver<Option<types::Endpoint>>, mpsc::Sender<Msg>);
+}
+
+struct StaticSocketAddr(SocketAddr);
+
+impl DiscoveryProcess for StaticSocketAddr {
+    fn start_discovery(self, runtime: &mut Runtime, recv: mpsc::Receiver<Option<types::Endpoint>>, sender: mpsc::Sender<Msg>)
+    {
+        let endpoint = types::Endpoint::from_addr(self.0);
+        let action = discovery::static_discovery(recv, sender, endpoint);
+
+        runtime.spawn(action);
+    }
+}
+
+struct GossipDiscovery(types::GossipSeedClusterSettings);
+
+impl DiscoveryProcess for GossipDiscovery {
+    fn start_discovery(self, runtime: &mut Runtime, recv: mpsc::Receiver<Option<types::Endpoint>>, sender: mpsc::Sender<Msg>)
+    {
+        let action = discovery::gossip_seed_discovery(recv, sender, self.0);
+
+        runtime.spawn(action);
     }
 }
 
@@ -215,9 +265,12 @@ impl Connection {
         }
     }
 
-    fn new(settings: Settings, addr: SocketAddr) -> Connection {
+    fn new<D>(settings: Settings, discovery: D)
+        -> Connection
+            where D: DiscoveryProcess
+    {
         let mut runtime = Runtime::new().unwrap();
-        let sender = Self::initialize(&settings, addr, &mut runtime);
+        let sender = Self::initialize(&settings, &mut runtime, discovery);
         let shutdown = runtime.shutdown_on_idle();
 
         Connection {
@@ -227,8 +280,11 @@ impl Connection {
         }
     }
 
-    fn with_runtime(settings: Settings, addr: SocketAddr, runtime: &mut Runtime) -> Connection {
-        let sender = Self::initialize(&settings, addr, runtime);
+    fn with_runtime<D>(settings: Settings, runtime: &mut Runtime, discovery: D)
+        -> Connection
+            where D: DiscoveryProcess
+    {
+        let sender = Self::initialize(&settings, runtime, discovery);
 
         Connection {
             shutdown: None,
@@ -237,16 +293,18 @@ impl Connection {
         }
     }
 
-    fn initialize(settings: &Settings, addr: SocketAddr, runtime: &mut Runtime) -> Sender<Msg> {
+    fn initialize<D>(settings: &Settings, runtime: &mut Runtime, discovery: D)
+        -> Sender<Msg>
+            where D: DiscoveryProcess
+    {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
         let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
         let driver = Driver::new(&settings, start_discovery, sender.clone());
-        let endpoint = types::Endpoint::from_addr(addr);
-        let discovery = discovery::static_discovery(run_discovery, sender.clone(), endpoint);
-        let action = connection_state_machine(cloned_sender, recv, driver);
 
-        let _ = runtime.spawn(discovery);
+        discovery.start_discovery(runtime, run_discovery, sender.clone());
+
+        let action = connection_state_machine(cloned_sender, recv, driver);
         let _ = runtime.spawn(action);
 
         sender

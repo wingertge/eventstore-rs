@@ -4,21 +4,16 @@ use std::io;
 use std::iter::FromIterator;
 use std::vec::IntoIter;
 use futures::{ IntoFuture, Future, Sink };
-use futures::future::{ self, FutureResult, Loop };
-use futures::stream::{ self, Stream };
+use futures::future::{ self, Loop };
+use futures::stream::Stream;
 use futures::sync::mpsc;
 use rand;
 use rand::seq::SliceRandom;
-use reqwest::async::Client;
 use serde::{ Deserialize, Serialize };
-use types::{ Endpoint, GossipSeed, ClusterSettings, NodePreference };
+use types::{ Endpoint, GossipSeed, GossipSeedClusterSettings, NodePreference };
 use uuid::Uuid;
 use internal::messaging::Msg;
 use tokio::spawn;
-
-pub struct StaticDiscovery {
-    endpoint: Endpoint,
-}
 
 pub(crate) fn static_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)
     -> impl Future<Item=(), Error=()>
@@ -48,11 +43,11 @@ pub(crate) fn static_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sende
     }).map(|_| ())
 }
 
-pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: ClusterSettings)
+pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: GossipSeedClusterSettings)
     -> impl Future<Item=(), Error=()>
 {
     struct State {
-        settings: ClusterSettings,
+        settings: GossipSeedClusterSettings,
         client: reqwest::Client,
         previous_candidates: Option<Vec<Member>>,
         preference: NodePreference,
@@ -148,7 +143,7 @@ pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, 
     }).map(|_| ())
 }
 
-fn candidates_from_dns(settings: &ClusterSettings) -> Vec<GossipSeed> {
+fn candidates_from_dns(settings: &GossipSeedClusterSettings) -> Vec<GossipSeed> {
     // TODO - Currently we only shuffling from the initial seed list.
     // Later on, we will also try to get candidates from the DNS server
     // itself.
@@ -420,8 +415,8 @@ fn determine_best_node(preference: NodePreference, members: &[Member])
 }
 
 fn boxed_future<F: 'static>(future: F)
-    -> Box<dyn Future<Item=F::Item, Error=F::Error>>
-        where F: Future
+    -> Box<dyn Future<Item=F::Item, Error=F::Error> + Send>
+        where F: Future + Send
 {
     Box::new(future)
 }

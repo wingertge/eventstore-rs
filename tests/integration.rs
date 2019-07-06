@@ -562,7 +562,7 @@ fn all_round_operation_test() {
 
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
-        .start(conn_str)
+        .connect_to_static_node(conn_str)
         .unwrap();
 
     test_write_events(&connection);

@@ -1,5 +1,5 @@
 use core::option::Option;
-use std::io::{ self, Error, ErrorKind };
+use std::io::{ Error, ErrorKind };
 use std::time::{ Duration, Instant };
 
 use futures::{ Future, Stream, Sink };

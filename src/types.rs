@@ -1500,9 +1500,11 @@ impl GossipSeed {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum NodePreference {
     /// When attempting connnection, prefers master node.
+    /// TODO - Not implemented yet.
     Master,
 
     /// When attempting connnection, prefers slave node.
+    /// TODO - Not implemented yet.
     Slave,
 
     /// When attempting connnection, has no node preference.
@@ -1543,6 +1545,45 @@ impl ClusterSettings {
             external_gossip_port: 2113,
             timeout: Duration::from_secs(10),
             seeds,
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Contains settings related to a cluster of fixed nodes.
+pub struct GossipSeedClusterSettings {
+    pub(crate) seeds: vec1::Vec1<GossipSeed>,
+    pub(crate) preference: NodePreference,
+    pub(crate) gossip_timeout: Duration,
+    pub(crate) max_discover_attempts: usize,
+}
+
+impl GossipSeedClusterSettings {
+    /// Creates a `GossipSeedClusterSettings` from a non-empty list of gossip
+    /// seeds.
+    pub fn new(seeds: vec1::Vec1<GossipSeed>) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            seeds,
+            preference: NodePreference::Random,
+            gossip_timeout: Duration::from_secs(1),
+            max_discover_attempts: 10,
+        }
+    }
+
+    /// Maximum duration a node should take when requested a gossip request.
+    pub fn set_gossip_timeout(self, gossip_timeout: Duration) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            gossip_timeout,
+            ..self
+        }
+    }
+
+    /// Maximum number of retries during a discovery process. Discovery process
+    /// is when the client tries to figure out the best node to connect to.
+    pub fn set_max_discover_attempts(self, max_attempt: usize) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            max_discover_attempts: max_attempt,
+            ..self
         }
     }
 }
