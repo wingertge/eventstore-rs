@@ -1523,32 +1523,6 @@ impl fmt::Display for NodePreference {
     }
 }
 
-/// Contains settings related to a connection to a cluster.
-pub struct ClusterSettings {
-    /// The maximum number of attempts for discovering endpoints.
-    pub(crate) max_discover_attempts: usize,
-
-    /// The well-known endpoint on which cluster managers are running.
-    pub(crate) external_gossip_port: u16,
-
-    /// Endpoints for seeding gossip if not using DNS.
-    pub(crate) seeds: vec1::Vec1<GossipSeed>,
-
-    /// Timeout for cluster gossip.
-    pub(crate) timeout: Duration,
-}
-
-impl ClusterSettings {
-    pub fn from_gossip_seeds(seeds: vec1::Vec1<GossipSeed>) -> ClusterSettings {
-        ClusterSettings {
-            max_discover_attempts: 10,
-            external_gossip_port: 2113,
-            timeout: Duration::from_secs(10),
-            seeds,
-        }
-    }
-}
-
 #[derive(Debug)]
 /// Contains settings related to a cluster of fixed nodes.
 pub struct GossipSeedClusterSettings {
