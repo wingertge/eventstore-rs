@@ -6,9 +6,11 @@ extern crate log;
 extern crate serde_json;
 extern crate env_logger;
 extern crate uuid;
+extern crate vec1;
 
 use eventstore::Slice;
 use std::collections::HashMap;
+use std::io;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::{ Future, Stream };
@@ -559,6 +561,20 @@ fn all_round_operation_test() {
     let conn_str = format!("{}:1113", host);
 
     info!("Connection string: {}", conn_str);
+
+    let seeds = {
+        let mut xs = vec![];
+
+        for i in 0..2 {
+            let ext_http_port = i * 1000 + 1114;
+            let addr_str = format!("127.0.0.1:{}", ext_http_port);
+            let seed = eventstore::GossipSeed::new(addr_str).unwrap();
+
+            xs.push(seed);
+        }
+
+        xs
+    };
 
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
