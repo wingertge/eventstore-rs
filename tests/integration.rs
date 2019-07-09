@@ -10,7 +10,6 @@ extern crate vec1;
 
 use eventstore::Slice;
 use std::collections::HashMap;
-use std::io;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::{ Future, Stream };
@@ -554,6 +553,7 @@ fn test_persistent_subscription(connection: &eventstore::Connection) {
 #[test]
 fn all_round_operation_test() {
     use std::env;
+    use vec1::Vec1;
 
     env_logger::init();
 
@@ -576,10 +576,13 @@ fn all_round_operation_test() {
         xs
     };
 
+    let setts = eventstore::GossipSeedClusterSettings::new(Vec1::try_from_vec(seeds).unwrap());
+
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
-        .connect_to_static_node(conn_str)
-        .unwrap();
+        // .connect_to_static_node(conn_str)
+        .connect_to_cluster_through_gossip(setts);
+        // .unwrap();
 
     test_write_events(&connection);
     test_read_event(&connection);

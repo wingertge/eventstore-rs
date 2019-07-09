@@ -139,7 +139,11 @@ impl ConnectionBuilder {
     {
         let discovery = GossipDiscovery(settings);
 
-        Connection::new(self.settings, discovery)
+        let client = Connection::new(self.settings, discovery);
+
+        client.start();
+
+        client
     }
 
     /// Creates a connection to a cluster of EventStore nodes. The connection will
@@ -150,7 +154,11 @@ impl ConnectionBuilder {
     {
         let discovery = GossipDiscovery(settings);
 
-        Connection::with_runtime(self.settings, runtime, discovery)
+        let client = Connection::with_runtime(self.settings, runtime, discovery);
+
+        client.start();
+
+        client
     }
 }
 

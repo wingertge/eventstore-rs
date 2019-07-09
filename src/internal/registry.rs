@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::io;
 
 use bytes::BytesMut;
+use protobuf;
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -8,6 +10,7 @@ use internal::connection::Connection;
 use internal::messages;
 use internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
 use internal::package::Pkg;
+use types;
 
 struct Request {
     session: OperationId,
@@ -224,22 +227,37 @@ impl Requests {
                         Cmd::NotHandled => {
                             warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
 
-                            let msg: ::std::io::Result<messages::NotHandled> =
-                                pkg.to_message();
+                            let msg: io::Result<Option<types::Endpoint>> =
+                                pkg.to_message().and_then(|not_handled: messages::NotHandled|
+                                {
+                                    if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
+                                        let master_info: messages::NotHandled_MasterInfo =
+                                            protobuf::parse_from_bytes(not_handled.get_additional_info())?;
+
+                                        // TODO - Support reconnection on the secure port when we are going to
+                                        // implement SSL connection.
+                                        let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
+                                        let external_tcp_port = types::Endpoint::from_addrs(addr_str)?;
+
+                                        Ok(Some(external_tcp_port))
+                                    } else {
+                                        Ok(None)
+                                    }
+                                });
 
                             match msg {
-                                Ok(not_handled) => {
-                                    match not_handled.get_reason() {
-                                        messages::NotHandled_NotHandledReason::NotMaster => {
+                                Ok(endpoint_opt) => {
+                                    match endpoint_opt {
+                                        Some(endpoint) => {
                                             warn!("Received a non master error on command {:?} id {}.
-                                                  This driver doesn't support cluster connection yet.", original_cmd, pkg_id);
+                                                  This driver doesn't support cluster connection yet. [{:?}]", original_cmd, pkg_id, endpoint);
 
                                             op.failed(OperationError::NotImplemented);
 
                                             Out::Failed
                                         },
 
-                                        _ => {
+                                        None => {
                                             warn!("The server has either not started or is too busy.
                                                   Retrying command {:?} id {}.", original_cmd, pkg_id);
 

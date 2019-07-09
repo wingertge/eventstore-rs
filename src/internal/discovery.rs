@@ -50,7 +50,7 @@ pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, 
 {
     struct State {
         settings: GossipSeedClusterSettings,
-        client: reqwest::Client,
+        client: reqwest::async::Client,
         previous_candidates: Option<Vec<Member>>,
         preference: NodePreference,
         sender: mpsc::Sender<Msg>,
@@ -61,7 +61,7 @@ pub(crate) fn gossip_seed_discovery(consumer: mpsc::Receiver<Option<Endpoint>>, 
         State {
             settings,
             sender,
-            client: reqwest::Client::new(),
+            client: reqwest::async::Client::new(),
             previous_candidates: None,
             preference: NodePreference::Random,
             candidates: vec![].into_iter(),
@@ -252,6 +252,12 @@ impl fmt::Display for VNodeState {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+struct Gossip {
+    members: Vec<MemberInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 struct MemberInfo {
     instance_id: Uuid,
     state: VNodeState,
@@ -384,7 +390,7 @@ pub(crate) struct NodeEndpoints {
     pub secure_tcp_endpoint: Option<Endpoint>,
 }
 
-fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
+fn get_gossip_from(client: reqwest::async::Client, gossip: GossipSeed)
     -> impl Future<Item=Vec<MemberInfo>, Error=io::Error>
 {
     gossip.url()
@@ -394,8 +400,8 @@ fn get_gossip_from(client: reqwest::Client, gossip: GossipSeed)
             client
                 .get(url)
                 .send()
-                .and_then(|mut res| res.json::<Vec<MemberInfo>>())
-                .map_err(|error|
+                .and_then(|mut res| res.json::<Gossip>().map(|g| g.members))
+                .map_err(move |error|
                 {
                     let msg = format!("[{}] responded with [{}]", gossip, error);
                     io::Error::new(io::ErrorKind::Other, msg)

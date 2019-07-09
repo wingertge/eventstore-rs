@@ -1439,6 +1439,25 @@ impl Endpoint {
             addr,
         }
     }
+
+    // FIXME: I should probably pick a better name as it confusing if
+    // we take into account of `from_addr`. It would probably end up with
+    // `from_addr` being deleted.
+    pub(crate) fn from_addrs<A>(addrs: A) -> io::Result<Endpoint>
+        where A: ToSocketAddrs
+    {
+        let mut iter = addrs.to_socket_addrs()?;
+
+        if let Some(addr) = iter.next() {
+            let endpoint = Endpoint {
+                addr,
+            };
+
+            Ok(endpoint)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
+        }
+    }
 }
 
 /// Represents a source of cluster gossip.
