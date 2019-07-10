@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::Deref;
@@ -96,6 +97,13 @@ impl Outcome {
             _             => false,
         }
     }
+
+    pub fn is_continue(&self) -> bool {
+        match *self {
+            Outcome::Continue(_) => true,
+            _                    => false,
+        }
+    }
 }
 
 pub type Decision = ::std::io::Result<Outcome>;
@@ -151,6 +159,8 @@ pub(crate) struct OperationWrapper {
     timeout: Duration,
     inner: Box<OperationImpl + Sync + Send>,
     creds: Option<types::Credentials>,
+    requests: HashMap<Uuid, Tracking>,
+
 }
 
 pub(crate) struct Tracking {
@@ -193,19 +203,17 @@ pub(crate) trait ReqBuffer {
 
 /// Used to allow an operation to support multiple exchanges at the same time
 /// with the server.
-struct VecReqBuffer<'a, A: 'a + Session> {
-    session: &'a mut A,
+struct VecReqBuffer<'a> {
     dest: &'a mut BytesMut,
     creds: Option<types::Credentials>,
     pkgs: Vec<Pkg>,
 }
 
-impl<'a, A: Session> VecReqBuffer<'a, A> {
-    fn new(session: &'a mut A, dest: &'a mut BytesMut, creds: Option<types::Credentials>)
-        -> VecReqBuffer<'a, A>
+impl<'a> VecReqBuffer<'a> {
+    fn new(dest: &'a mut BytesMut, creds: Option<types::Credentials>)
+        -> VecReqBuffer<'a>
     {
         VecReqBuffer {
-            session,
             dest,
             creds,
             pkgs: Vec::new(),
@@ -213,26 +221,15 @@ impl<'a, A: Session> VecReqBuffer<'a, A> {
     }
 }
 
-impl<'a, A: Session> ReqBuffer for VecReqBuffer<'a, A> {
+impl<'a> ReqBuffer for VecReqBuffer<'a> {
     fn push_req(&mut self, req: Request) -> ::std::io::Result<()> {
-        let id  = self.session.new_request(req.cmd);
+        let id = Uuid::new_v4();
         let pkg = req.produce_pkg(id, self.creds.clone(), self.dest)?;
 
         self.pkgs.push(pkg);
 
         Ok(())
     }
-}
-
-pub(crate) trait Session {
-    fn new_request(&mut self, Cmd) -> Uuid;
-    fn pop(&mut self, &Uuid) -> ::std::io::Result<Tracking>;
-    fn reuse(&mut self, Tracking);
-    fn using(&mut self, &Uuid) -> ::std::io::Result<&mut Tracking>;
-    fn requests(&self) -> Vec<&Tracking>;
-    fn terminate(&mut self);
-    fn connection_id(&self) -> Uuid;
-    fn has_running_requests(&self) -> bool;
 }
 
 impl OperationWrapper {
@@ -249,28 +246,46 @@ impl OperationWrapper {
             creds,
             max_retry,
             timeout,
+            requests: HashMap::new(),
         }
     }
 
-    pub(crate) fn send<A: Session>(&mut self, dest: &mut BytesMut, session: A)
-        -> Decision
-    {
-        self.poll(dest, session, None)
+    pub(crate) fn request_keys(&self) -> impl Iterator<Item=&Uuid> {
+        self.requests.keys()
     }
 
-    pub(crate) fn receive<A: Session>(&mut self, dest: &mut BytesMut, session: A, pkg: Pkg)
+    pub(crate) fn send(&mut self, conn_id: Uuid, dest: &mut BytesMut)
         -> Decision
     {
-        self.poll(dest, session, Some(pkg))
+        self.poll(conn_id, dest, None)
     }
 
-    fn poll<A: Session>(&mut self, dest: &mut BytesMut, mut session: A, input: Option<Pkg>) -> Decision {
+    pub(crate) fn receive(&mut self, conn_id: Uuid, dest: &mut BytesMut, pkg: Pkg)
+        -> Decision
+    {
+        self.poll(conn_id, dest, Some(pkg))
+    }
+
+    fn track_pkgs<'a, I>(&mut self, conn_id: Uuid, pkgs: I)
+        where I: IntoIterator<Item=&'a Pkg>
+    {
+        for pkg in pkgs {
+            let tracking = Tracking::new(pkg.cmd, conn_id);
+
+            self.requests.insert(pkg.correlation, tracking);
+        }
+    }
+
+    fn poll(&mut self, conn_id: Uuid, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
         match input {
             // It means this operation was newly created and has to issue its
             // first package to the server.
             None => {
+                let id = Uuid::new_v4();
                 let req = self.inner.initial_request();
-                let id = session.new_request(req.cmd);
+                let tracking = Tracking::new(req.cmd, conn_id);
+
+                self.requests.insert(id, tracking);
 
                 req.send(id, self.creds.clone(), dest)
             },
@@ -282,30 +297,30 @@ impl OperationWrapper {
 
                 if self.inner.is_valid_response(pkg.cmd) {
                     let (pkgs, result) = {
-                        let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
+                        let mut buffer = VecReqBuffer::new(dest, self.creds.clone());
                         let     result = self.inner.respond(&mut buffer, pkg)?;
+
+                        self.track_pkgs(conn_id, buffer.pkgs.as_slice());
 
                         (buffer.pkgs, result)
                     };
 
                     match result {
                         ImplResult::Retry => {
-                            return self.retry(dest, &mut session, corr_id)
+                            return self.retry(dest, corr_id)
                         },
 
                         ImplResult::Done => {
-                            session.pop(&corr_id)?;
+                            self.requests.remove(&corr_id);
                         },
 
                         ImplResult::Awaiting => {
-                            let tracker = session.using(&corr_id)?;
-
-                            tracker.lasting = true;
+                            if let Some(tracker) = self.requests.get_mut(&corr_id) {
+                                tracker.lasting = true;
+                            }
                         },
 
                         ImplResult::Terminate => {
-                            session.terminate();
-
                             return op_done();
                         },
                     };
@@ -324,45 +339,41 @@ impl OperationWrapper {
         self.inner.report_operation_error(error);
     }
 
-    pub(crate) fn retry<A: Session>(&mut self, dest: &mut BytesMut, session: &mut A, id: Uuid) -> Decision {
-        let mut tracker = session.pop(&id)?;
+    pub(crate) fn retry(&mut self, dest: &mut BytesMut, id: Uuid) -> Decision {
+        if let Some(mut tracker) = self.requests.remove(&id) {
+            if tracker.attempts + 1 >= self.max_retry {
+                self.failed(OperationError::Aborted);
 
-        if tracker.attempts + 1 >= self.max_retry {
-            self.failed(OperationError::Aborted);
-            session.terminate();
+                return op_done();
+            }
 
-            return op_done();
+            tracker.attempts += 1;
+            tracker.id = Uuid::new_v4();
+
+            let req = self.inner.retry(tracker.cmd);
+            let decision = req.send(tracker.id, self.creds.clone(), dest);
+
+            self.requests.insert(tracker.id, tracker);
+
+            decision
+        } else {
+            op_done()
         }
-
-        tracker.attempts += 1;
-        tracker.id       = Uuid::new_v4();
-
-        let req      = self.inner.retry(tracker.cmd);
-        let decision = req.send(tracker.id, self.creds.clone(), dest);
-
-        session.reuse(tracker);
-
-        decision
     }
 
-    pub(crate) fn check_and_retry<A>(
-        &mut self,
-        dest: &mut BytesMut,
-        mut session: A
-    ) -> Decision
-    where
-        A: Session
+    pub(crate) fn check_and_retry(&mut self, conn_id: Uuid, dest: &mut BytesMut)
+        -> Decision
     {
         enum State {
             HasDropped(Uuid),
             Retry(Uuid),
         }
 
+        let mut pkgs = Vec::new();
         let mut process = Vec::new();
-        let mut pkgs    = Vec::new();
 
-        for tracker in session.requests() {
-            if tracker.conn_id != session.connection_id() {
+        for tracker in self.requests.values() {
+            if tracker.conn_id != conn_id {
                 process.push(State::HasDropped(tracker.id));
             } else if tracker.has_timeout(self.timeout) {
                 process.push(State::Retry(tracker.id));
@@ -372,31 +383,33 @@ impl OperationWrapper {
         for state in process {
             match state {
                 State::HasDropped(id) => {
-                    let tracker = session.pop(&id)?;
+                    if let Some(mut tracker) = self.requests.remove(&id) {
+                        let mut buffer = VecReqBuffer::new(
+                            dest,
+                            self.creds.clone(),
+                        );
 
-                    let mut buffer = VecReqBuffer::new(
-                        &mut session,
-                        dest,
-                        self.creds.clone()
-                    );
+                        self.inner.connection_has_dropped(
+                            &mut buffer,
+                            tracker.cmd
+                        )?;
 
-                    self.inner.connection_has_dropped(
-                        &mut buffer,
-                        tracker.cmd
-                    )?;
-
-                    pkgs.append(&mut buffer.pkgs);
+                        self.track_pkgs(conn_id, buffer.pkgs.as_slice());
+                        pkgs.append(&mut buffer.pkgs);
+                    }
                 },
 
                 State::Retry(id) => {
-                    let outcome = self.retry(dest, &mut session, id)?;
+                    // We don't need to try packages in this case because
+                    // `retry` function is already tracking those for us.
+                    let outcome = self.retry(dest, id)?;
 
                     pkgs.append(&mut outcome.produced_pkgs());
                 },
             };
         }
 
-        if session.has_running_requests() {
+        if !pkgs.is_empty() {
             op_send_pkgs(pkgs)
         } else {
             op_done()

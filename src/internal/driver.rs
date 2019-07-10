@@ -342,9 +342,9 @@ impl Driver {
                     if let Some(ref conn) = self.candidate {
                         info!("Connection identified: {}.", conn.id);
 
-                        // HACK: It can happen the user submitted operations before the connection was
-                        // available. Those operations are only check on every 's_operationTimeout'
-                        // ms. This could lead the first operation to take time before gettings.
+                        // HACK: In some situation, an user might submit operations before the connection was
+                        // available. Those operations are only checked on every 's_operationTimeout'
+                        // ms. This could lead the first operations to take time before being sent.
                         // FIXME: We might consider doing that hack only if it's the first time
                         // we connect with the server.
                         self.registry.check_and_retry(conn);
@@ -367,8 +367,20 @@ impl Driver {
             }
         } else if self.state == ConnectionState::Connected {
             // It will be always 'Some' when receiving a package.
-            if let Some(ref conn) = self.candidate {
-                self.registry.handle(pkg, conn);
+            if let Some(conn) = self.candidate.take() {
+                if let Some(new_endpoint) = self.registry.handle(pkg, &conn) {
+                    // We have been notified to connect to an other eventstore node.
+                    // This only happens if the user uses a cluster-mode connection.
+                    info!("Force reconnection to [{}]", new_endpoint);
+
+                    self.attempt_opt = Some(Attempt::new());
+                    self.state = ConnectionState::Connecting;
+                    self.phase = Phase::EndpointDiscovery;
+
+                    self.on_establish(new_endpoint);
+                } else {
+                    self.candidate = Some(conn);
+                }
             }
         }
     }
