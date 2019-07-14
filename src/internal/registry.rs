@@ -83,169 +83,289 @@ impl Requests {
             force_reconnect: Option<types::Endpoint>,
         }
 
-        let pkg_id  = pkg.correlation;
+        let pkg_id = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
-        if let Some(req) = self.assocs.remove(&pkg_id) {
-            let session_id = req.session;
-            let original_cmd = req.cmd;
+        let req_opt = self.assocs.remove(&pkg_id).and_then(|req|
+        {
+            self.sessions.remove(&req.session)
+                .map(|session| (req.cmd, session))
+        });
 
+        if let Some((original_cmd, mut session)) = req_opt {
             debug!("Package [{}]: command {:?} received {:?}.", pkg_id, original_cmd, pkg_cmd);
 
-            let outcome = {
-                let mut op =
-                    self.sessions
-                        .remove(&session_id)
-                        .expect(&format!("Unknown session!: Package[{}]: command {:?}, received {:?}.", pkg_id, original_cmd, pkg_cmd));
+            let _ = match pkg.cmd {
+                Cmd::BadRequest => {
+                    let msg = pkg.build_text();
 
-                let out = {
+                    error!("Bad request for command {:?}: {}", original_cmd, msg);
 
-                    match pkg.cmd {
-                        Cmd::BadRequest => {
-                            let msg = pkg.build_text();
+                    session.failed(OperationError::ServerError(Some(msg)));
+                },
 
-                            error!("Bad request for command {:?}: {}.", original_cmd, msg);
+                Cmd::NotAuthenticated => {
+                    error!("Not authenticated for command {:?}.", original_cmd);
 
-                            op.failed(OperationError::ServerError(Some(msg)));
+                    session.failed(OperationError::AuthenticationRequired);
+                },
 
-                            Out::Failed
-                        },
+                Cmd::NotHandled => {
+                    warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
 
-                        Cmd::NotAuthenticated => {
-                            error!("Not authenticated for command {:?}.", original_cmd);
+                    let decoded_msg: io::Result<Option<types::Endpoint>> =
+                        pkg.to_message().and_then(|not_handled: messages::NotHandled|
+                        {
+                            if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
+                                let master_info: messages::NotHandled_MasterInfo =
+                                    protobuf::parse_from_bytes(not_handled.get_additional_info())?;
 
-                            op.failed(OperationError::AuthenticationRequired);
+                                // TODO - Support reconnection on the secure port when we are going to
+                                // implement SSL connection.
+                                let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
+                                let external_tcp_port = types::Endpoint::from_addrs(addr_str)?;
 
-                            Out::Failed
-                        },
+                                Ok(Some(external_tcp_port))
+                            } else {
+                                Ok(None)
+                            }
+                        });
 
-                        Cmd::NotHandled => {
-                            warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
+                    match decoded_msg {
+                        Ok(endpoint_opt) => {
+                            if let Some(endpoint) = endpoint_opt {
+                                warn!("Received a non master error on command {:?} id {}, [{:?}]",
+                                      original_cmd, pkg_id, endpoint);
 
-                            let msg: io::Result<Option<types::Endpoint>> =
-                                pkg.to_message().and_then(|not_handled: messages::NotHandled|
-                                {
-                                    if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
-                                        let master_info: messages::NotHandled_MasterInfo =
-                                            protobuf::parse_from_bytes(not_handled.get_additional_info())?;
+                                awaiting.push(session);
+                            } else {
+                                warn!("The server has either not started or is too busy.
+                                      Retrying command {:?} id {}.", original_cmd, pkg_id);
 
-                                        // TODO - Support reconnection on the secure port when we are going to
-                                        // implement SSL connection.
-                                        let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
-                                        let external_tcp_port = types::Endpoint::from_addrs(addr_str)?;
+                                match session.retry(&mut self.buffer, pkg_id) {
+                                    Ok(outcome) => {
+                                        let pkgs = outcome.produced_pkgs();
 
-                                        Ok(Some(external_tcp_port))
-                                    } else {
-                                        Ok(None)
-                                    }
-                                });
-
-                            match msg {
-                                Ok(endpoint_opt) => {
-                                    match endpoint_opt {
-                                        Some(endpoint) => {
-                                            warn!("Received a non master error on command {:?} id {}, [{:?}]", original_cmd, pkg_id, endpoint);
-
-                                            awaiting.push(op);
-
-                                            Out::Handled(Some(endpoint))
-                                        },
-
-                                        None => {
-                                            warn!("The server has either not started or is too busy.
-                                                  Retrying command {:?} id {}.", original_cmd, pkg_id);
-
-                                            match op.retry(&mut self.buffer, pkg_id) {
-                                                Ok(outcome) => {
-                                                    let pkgs = outcome.produced_pkgs();
-
-                                                    if !pkgs.is_empty() {
-                                                        for pkg in pkgs.as_slice() {
-                                                            self.assocs.insert(pkg.correlation, Request::new(session_id, pkg.cmd));
-                                                        }
-
-                                                        self.sessions.insert(session_id, op);
-                                                        conn.enqueue_all(pkgs);
-                                                    }
-
-                                                    Out::Handled(None)
-                                                },
-
-                                                Err(error) => {
-                                                    error!(
-                                                        "An error occured when retrying command {:?} id {}: {}.",
-                                                        original_cmd, pkg_id, error
-                                                    );
-
-                                                    Out::Failed
-                                                },
+                                        if !pkgs.is_empty() {
+                                            for pkg in pkgs.as_slice() {
+                                                self.assocs.insert(pkg.correlation, Request::new(session.id, pkg.cmd));
                                             }
-                                        },
-                                    }
-                                },
 
-                                Err(error) => {
-                                    error!("Decoding error: can't decode NotHandled message: {}.", error);
+                                            self.sessions.insert(session.id, session);
+                                            conn.enqueue_all(pkgs);
+                                        }
+                                    },
 
-                                    Out::Failed
-                                },
+                                    Err(error) => {
+                                        error!(
+                                            "An error occured when retrying command {:?} id {}: {}.",
+                                            original_cmd, pkg_id, error
+                                        );
+                                    },
+                                }
+
                             }
                         },
 
-                        _ => match op.receive(conn.id, &mut self.buffer, pkg) {
-                            Ok(outcome) => {
-                                let is_continue = outcome.is_continue();
-                                let pkgs = outcome.produced_pkgs();
-
-                                if !pkgs.is_empty() {
-                                    for pkg in pkgs.as_slice() {
-                                        self.assocs.insert(pkg.correlation, Request::new(session_id, pkg.cmd));
-                                    }
-
-                                    self.sessions.insert(session_id, op);
-                                    conn.enqueue_all(pkgs);
-                                }
-
-                                if is_continue {
-                                    self.assocs.insert(pkg_id, req);
-                                }
-
-                                Out::Handled(None)
-                            },
-
-                            Err(e) => {
-                                error!("An error occured when running operation: {}", e);
-                                let msg = format!("Exception raised: {}", e);
-
-                                op.failed(OperationError::InvalidOperation(msg));
-
-                                Out::Failed
-                            },
+                        Err(e) => {
+                            error!("Decoding error: can't decode NotHandled message: {}.", e);
                         },
-                    }
-                };
+                    };
+                },
 
-                match out {
-                    Out::Failed => {
-                        for req_id in op.request_keys() {
-                            self.assocs.remove(req_id);
+                _ => match session.receive(conn.id, &mut self.buffer, pkg) {
+                    Ok(outcome) => {
+                        let pkgs = outcome.produced_pkgs();
+
+                        if !pkgs.is_empty() {
+                            for pkg in pkgs.as_slice() {
+                                self.assocs.insert(pkg.correlation, Request::new(session.id, pkg.cmd));
+                            }
+
+                            self.sessions.insert(session.id, session);
+                            conn.enqueue_all(pkgs);
                         }
-
-                        None
                     },
 
-                    Out::Handled(force_reconnect) => {
-                        force_reconnect
+                    Err(e) => {
+                        error!("An error occured when running operation: {}", e);
+                        let msg = format!("Exception raised: {}", e);
+
+                        session.failed(OperationError::InvalidOperation(msg));
                     },
-                }
+                },
             };
 
-            outcome
+            None
         } else {
             warn!("Package [{}] not handled: cmd {:?}.", pkg_id, pkg_cmd);
 
             None
         }
+
+        // let pkg_id  = pkg.correlation;
+        // let pkg_cmd = pkg.cmd;
+
+        // if let Some(req) = self.assocs.remove(&pkg_id) {
+        //     let session_id = req.session;
+        //     let original_cmd = req.cmd;
+
+        //     debug!("Package [{}]: command {:?} received {:?}.", pkg_id, original_cmd, pkg_cmd);
+
+        //     let outcome = {
+        //         let mut op =
+        //             self.sessions
+        //                 .remove(&session_id)
+        //                 .expect(&format!("Unknown session!: Package[{}]: command {:?}, received {:?}.", pkg_id, original_cmd, pkg_cmd));
+
+        //         let out = {
+
+        //             match pkg.cmd {
+        //                 Cmd::BadRequest => {
+        //                     let msg = pkg.build_text();
+
+        //                     error!("Bad request for command {:?}: {}.", original_cmd, msg);
+
+        //                     op.failed(OperationError::ServerError(Some(msg)));
+
+        //                     Out::Failed
+        //                 },
+
+        //                 Cmd::NotAuthenticated => {
+        //                     error!("Not authenticated for command {:?}.", original_cmd);
+
+        //                     op.failed(OperationError::AuthenticationRequired);
+
+        //                     Out::Failed
+        //                 },
+
+        //                 Cmd::NotHandled => {
+        //                     warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
+
+        //                     let msg: io::Result<Option<types::Endpoint>> =
+        //                         pkg.to_message().and_then(|not_handled: messages::NotHandled|
+        //                         {
+        //                             if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
+        //                                 let master_info: messages::NotHandled_MasterInfo =
+        //                                     protobuf::parse_from_bytes(not_handled.get_additional_info())?;
+
+        //                                 // TODO - Support reconnection on the secure port when we are going to
+        //                                 // implement SSL connection.
+        //                                 let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
+        //                                 let external_tcp_port = types::Endpoint::from_addrs(addr_str)?;
+
+        //                                 Ok(Some(external_tcp_port))
+        //                             } else {
+        //                                 Ok(None)
+        //                             }
+        //                         });
+
+        //                     match msg {
+        //                         Ok(endpoint_opt) => {
+        //                             match endpoint_opt {
+        //                                 Some(endpoint) => {
+        //                                     warn!("Received a non master error on command {:?} id {}, [{:?}]", original_cmd, pkg_id, endpoint);
+
+        //                                     awaiting.push(op);
+
+        //                                     Out::Handled(Some(endpoint))
+        //                                 },
+
+        //                                 None => {
+        //                                     warn!("The server has either not started or is too busy.
+        //                                           Retrying command {:?} id {}.", original_cmd, pkg_id);
+
+        //                                     match op.retry(&mut self.buffer, pkg_id) {
+        //                                         Ok(outcome) => {
+        //                                             let pkgs = outcome.produced_pkgs();
+
+        //                                             if !pkgs.is_empty() {
+        //                                                 for pkg in pkgs.as_slice() {
+        //                                                     self.assocs.insert(pkg.correlation, Request::new(session_id, pkg.cmd));
+        //                                                 }
+
+        //                                                 self.sessions.insert(session_id, op);
+        //                                                 conn.enqueue_all(pkgs);
+        //                                             }
+
+        //                                             Out::Handled(None)
+        //                                         },
+
+        //                                         Err(error) => {
+        //                                             error!(
+        //                                                 "An error occured when retrying command {:?} id {}: {}.",
+        //                                                 original_cmd, pkg_id, error
+        //                                             );
+
+        //                                             Out::Failed
+        //                                         },
+        //                                     }
+        //                                 },
+        //                             }
+        //                         },
+
+        //                         Err(error) => {
+        //                             error!("Decoding error: can't decode NotHandled message: {}.", error);
+
+        //                             Out::Failed
+        //                         },
+        //                     }
+        //                 },
+
+        //                 _ => match op.receive(conn.id, &mut self.buffer, pkg) {
+        //                     Ok(outcome) => {
+        //                         let is_continue = outcome.is_continue();
+        //                         let pkgs = outcome.produced_pkgs();
+
+        //                         if !pkgs.is_empty() {
+        //                             for pkg in pkgs.as_slice() {
+        //                                 self.assocs.insert(pkg.correlation, Request::new(session_id, pkg.cmd));
+        //                             }
+
+        //                             self.sessions.insert(session_id, op);
+        //                             conn.enqueue_all(pkgs);
+        //                         }
+
+        //                         if is_continue {
+        //                             self.assocs.insert(pkg_id, req);
+        //                         }
+
+        //                         Out::Handled(None)
+        //                     },
+
+        //                     Err(e) => {
+        //                         error!("An error occured when running operation: {}", e);
+        //                         let msg = format!("Exception raised: {}", e);
+
+        //                         op.failed(OperationError::InvalidOperation(msg));
+
+        //                         Out::Failed
+        //                     },
+        //                 },
+        //             }
+        //         };
+
+        //         match out {
+        //             Out::Failed => {
+        //                 for req_id in op.request_keys() {
+        //                     self.assocs.remove(req_id);
+        //                 }
+
+        //                 None
+        //             },
+
+        //             Out::Handled(force_reconnect) => {
+        //                 force_reconnect
+        //             },
+        //         }
+        //     };
+
+        //     outcome
+        // } else {
+        //     warn!("Package [{}] not handled: cmd {:?}.", pkg_id, pkg_cmd);
+
+        //     None
+        // }
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
