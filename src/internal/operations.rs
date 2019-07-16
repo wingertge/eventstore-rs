@@ -47,7 +47,7 @@ impl OperationError {
         OperationError::WrongClientImpl(None)
     }
 
-    fn wrong_client_impl_on_cmd(cmd: Cmd) -> OperationError {
+    pub(crate) fn wrong_client_impl_on_cmd(cmd: Cmd) -> OperationError {
         OperationError::WrongClientImpl(Some(cmd))
     }
 }
@@ -155,12 +155,11 @@ impl OperationId {
 pub(crate) struct OperationWrapper {
     // Operation unique id, useful for registry sessions.
     pub(crate) id: OperationId,
-    max_retry: usize,
-    timeout: Duration,
+    pub(crate) max_retry: usize,
+    pub(crate) timeout: Duration,
     inner: Box<OperationImpl + Sync + Send>,
     creds: Option<types::Credentials>,
     requests: HashMap<Uuid, Tracking>,
-
 }
 
 pub(crate) struct Tracking {
@@ -206,7 +205,7 @@ pub(crate) trait ReqBuffer {
 struct VecReqBuffer<'a> {
     dest: &'a mut BytesMut,
     creds: Option<types::Credentials>,
-    pkgs: Vec<Pkg>,
+    pkg_opt: Option<Pkg>,
 }
 
 impl<'a> VecReqBuffer<'a> {
@@ -216,7 +215,7 @@ impl<'a> VecReqBuffer<'a> {
         VecReqBuffer {
             dest,
             creds,
-            pkgs: Vec::new(),
+            pkg_opt: None,
         }
     }
 }
@@ -226,7 +225,7 @@ impl<'a> ReqBuffer for VecReqBuffer<'a> {
         let id = Uuid::new_v4();
         let pkg = req.produce_pkg(id, self.creds.clone(), self.dest)?;
 
-        self.pkgs.push(pkg);
+        self.pkg_opt = Some(pkg);
 
         Ok(())
     }
@@ -254,17 +253,17 @@ impl OperationWrapper {
         self.requests.keys()
     }
 
-    pub(crate) fn send(&mut self, conn_id: Uuid, dest: &mut BytesMut)
-        -> Decision
-    {
-        self.poll(conn_id, dest, None)
-    }
+    // pub(crate) fn send(&mut self, conn_id: Uuid, dest: &mut BytesMut)
+    //     -> Decision
+    // {
+    //     self.poll(conn_id, dest, None)
+    // }
 
-    pub(crate) fn receive(&mut self, conn_id: Uuid, dest: &mut BytesMut, pkg: Pkg)
-        -> Decision
-    {
-        self.poll(conn_id, dest, Some(pkg))
-    }
+    // pub(crate) fn receive(&mut self, conn_id: Uuid, dest: &mut BytesMut, pkg: Pkg)
+    //     -> Decision
+    // {
+    //     self.poll(conn_id, dest, Some(pkg))
+    // }
 
     fn track_pkgs<'a, I>(&mut self, conn_id: Uuid, pkgs: I)
         where I: IntoIterator<Item=&'a Pkg>
@@ -276,145 +275,162 @@ impl OperationWrapper {
         }
     }
 
-    fn poll(&mut self, conn_id: Uuid, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
-        match input {
-            // It means this operation was newly created and has to issue its
-            // first package to the server.
-            None => {
-                let id = Uuid::new_v4();
-                let req = self.inner.initial_request();
-                let tracking = Tracking::new(req.cmd, conn_id);
+    pub(crate) fn issue_request(&self, buffer: &mut BytesMut, correlation: Uuid)
+        -> ::std::io::Result<Pkg>
+    {
+        let req = self.inner.initial_request();
 
-                self.requests.insert(id, tracking);
-
-                req.send(id, self.creds.clone(), dest)
-            },
-
-            // At this point, it means this operation send a package to
-            // the server already.
-            Some(pkg) => {
-                let corr_id = pkg.correlation;
-
-                if self.inner.is_valid_response(pkg.cmd) {
-                    let (pkgs, result) = {
-                        let mut buffer = VecReqBuffer::new(dest, self.creds.clone());
-                        let     result = self.inner.respond(&mut buffer, pkg)?;
-
-                        self.track_pkgs(conn_id, buffer.pkgs.as_slice());
-
-                        (buffer.pkgs, result)
-                    };
-
-                    match result {
-                        ImplResult::Retry => {
-                            return self.retry(dest, corr_id)
-                        },
-
-                        ImplResult::Done => {
-                            self.requests.remove(&corr_id);
-                        },
-
-                        ImplResult::Awaiting => {
-                            if let Some(tracker) = self.requests.get_mut(&corr_id) {
-                                tracker.lasting = true;
-                            }
-                        },
-
-                        ImplResult::Terminate => {
-                            return op_done();
-                        },
-                    };
-
-                    op_send_pkgs(pkgs)
-                } else {
-                    self.failed(OperationError::wrong_client_impl_on_cmd(pkg.cmd));
-
-                    op_done()
-                }
-            },
-        }
+        req.produce_pkg(correlation, self.creds.clone(), buffer)
     }
+
+    pub(crate) fn respond(&mut self, buffer: &mut BytesMut, pkg: Pkg)
+        -> ::std::io::Result<(ImplResult, Option<Pkg>)>
+    {
+        if self.inner.is_valid_response(pkg.cmd) {
+            let mut buffer = VecReqBuffer::new(buffer, self.creds.clone());
+            let result = self.inner.respond(&mut buffer, pkg)?;
+
+            return Ok((result, buffer.pkg_opt));
+        }
+
+        Ok((ImplResult::Unexpected, None))
+    }
+
+    // fn poll(&mut self, conn_id: Uuid, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
+    //     match input {
+    //         // It means this operation was newly created and has to issue its
+    //         // first package to the server.
+    //         None => {
+    //             let id = Uuid::new_v4();
+    //             let req = self.inner.initial_request();
+    //             let tracking = Tracking::new(req.cmd, conn_id);
+
+    //             self.requests.insert(id, tracking);
+
+    //             req.send(id, self.creds.clone(), dest)
+    //         },
+
+    //         // At this point, it means this operation send a package to
+    //         // the server already.
+    //         Some(pkg) => {
+    //             let corr_id = pkg.correlation;
+
+    //             if self.inner.is_valid_response(pkg.cmd) {
+    //                 let (pkgs, result) = {
+    //                     let mut buffer = VecReqBuffer::new(dest, self.creds.clone());
+    //                     let     result = self.inner.respond(&mut buffer, pkg)?;
+
+    //                     self.track_pkgs(conn_id, buffer.pkgs.as_slice());
+
+    //                     (buffer.pkgs, result)
+    //                 };
+
+    //                 match result {
+    //                     ImplResult::Retry => {
+    //                         return self.retry(dest, corr_id)
+    //                     },
+
+    //                     ImplResult::Done => {
+    //                         self.requests.remove(&corr_id);
+    //                     },
+
+    //                     ImplResult::Awaiting => {
+    //                         if let Some(tracker) = self.requests.get_mut(&corr_id) {
+    //                             tracker.lasting = true;
+    //                         }
+    //                     },
+
+    //                     ImplResult::Terminate => {
+    //                         return op_done();
+    //                     },
+    //                 };
+
+    //                 op_send_pkgs(pkgs)
+    //             } else {
+    //                 self.failed(OperationError::wrong_client_impl_on_cmd(pkg.cmd));
+
+    //                 op_done()
+    //             }
+    //         },
+    //     }
+    // }
 
     pub(crate) fn failed(&mut self, error: OperationError) {
         self.inner.report_operation_error(error);
     }
 
-    pub(crate) fn retry(&mut self, dest: &mut BytesMut, id: Uuid) -> Decision {
-        if let Some(mut tracker) = self.requests.remove(&id) {
-            if tracker.attempts + 1 >= self.max_retry {
-                self.failed(OperationError::Aborted);
-
-                return op_done();
-            }
-
-            tracker.attempts += 1;
-            tracker.id = Uuid::new_v4();
-
-            let req = self.inner.retry(tracker.cmd);
-            let decision = req.send(tracker.id, self.creds.clone(), dest);
-
-            self.requests.insert(tracker.id, tracker);
-
-            decision
-        } else {
-            op_done()
-        }
-    }
-
-    pub(crate) fn check_and_retry(&mut self, conn_id: Uuid, dest: &mut BytesMut)
-        -> Decision
+    pub(crate) fn retry(&mut self, buffer: &mut BytesMut, cmd: Cmd, correlation: Uuid)
+        -> ::std::io::Result<Pkg>
     {
-        enum State {
-            HasDropped(Uuid),
-            Retry(Uuid),
-        }
+        let req = self.inner.retry(cmd);
 
-        let mut pkgs = Vec::new();
-        let mut process = Vec::new();
-
-        for tracker in self.requests.values() {
-            if tracker.conn_id != conn_id {
-                process.push(State::HasDropped(tracker.id));
-            } else if tracker.has_timeout(self.timeout) {
-                process.push(State::Retry(tracker.id));
-            }
-        }
-
-        for state in process {
-            match state {
-                State::HasDropped(id) => {
-                    if let Some(mut tracker) = self.requests.remove(&id) {
-                        let mut buffer = VecReqBuffer::new(
-                            dest,
-                            self.creds.clone(),
-                        );
-
-                        self.inner.connection_has_dropped(
-                            &mut buffer,
-                            tracker.cmd
-                        )?;
-
-                        self.track_pkgs(conn_id, buffer.pkgs.as_slice());
-                        pkgs.append(&mut buffer.pkgs);
-                    }
-                },
-
-                State::Retry(id) => {
-                    // We don't need to try packages in this case because
-                    // `retry` function is already tracking those for us.
-                    let outcome = self.retry(dest, id)?;
-
-                    pkgs.append(&mut outcome.produced_pkgs());
-                },
-            };
-        }
-
-        if !pkgs.is_empty() {
-            op_send_pkgs(pkgs)
-        } else {
-            op_done()
-        }
+        req.produce_pkg(correlation, self.creds.clone(), buffer)
     }
+
+    pub(crate) fn connection_has_dropped(&mut self, buffer: &mut BytesMut, cmd: Cmd)
+        -> ::std::io::Result<Option<Pkg>>
+    {
+        let mut buffer = VecReqBuffer::new(buffer, self.creds.clone());
+
+        self.inner.connection_has_dropped(&mut buffer, cmd)?;
+
+        Ok(buffer.pkg_opt)
+    }
+
+    // pub(crate) fn check_and_retry(&mut self, conn_id: Uuid, dest: &mut BytesMut)
+    //     -> Decision
+    // {
+    //     enum State {
+    //         HasDropped(Uuid),
+    //         Retry(Uuid),
+    //     }
+
+    //     let mut pkgs = Vec::new();
+    //     let mut process = Vec::new();
+
+    //     for tracker in self.requests.values() {
+    //         if tracker.conn_id != conn_id {
+    //             process.push(State::HasDropped(tracker.id));
+    //         } else if tracker.has_timeout(self.timeout) {
+    //             process.push(State::Retry(tracker.id));
+    //         }
+    //     }
+
+    //     for state in process {
+    //         match state {
+    //             State::HasDropped(id) => {
+    //                 if let Some(mut tracker) = self.requests.remove(&id) {
+    //                     let mut buffer = VecReqBuffer::new(
+    //                         dest,
+    //                         self.creds.clone(),
+    //                     );
+
+    //                     self.inner.connection_has_dropped(
+    //                         &mut buffer,
+    //                         tracker.cmd
+    //                     )?;
+
+    //                     self.track_pkgs(conn_id, buffer.pkgs.as_slice());
+    //                     pkgs.append(&mut buffer.pkgs);
+    //                 }
+    //             },
+
+    //             State::Retry(id) => {
+    //                 // We don't need to try packages in this case because
+    //                 // `retry` function is already tracking those for us.
+    //                 let outcome = self.retry(dest, id)?;
+
+    //                 pkgs.append(&mut outcome.produced_pkgs());
+    //             },
+    //         };
+    //     }
+
+    //     if !pkgs.is_empty() {
+    //         op_send_pkgs(pkgs)
+    //     } else {
+    //         op_done()
+    //     }
+    // }
 }
 
 pub(crate) struct Request<'a> {
@@ -454,6 +470,7 @@ pub(crate) enum ImplResult {
     Awaiting,
     Done,
     Terminate,
+    Unexpected,
 }
 
 impl ImplResult {

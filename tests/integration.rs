@@ -580,9 +580,9 @@ fn all_round_operation_test() {
 
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
-        // .connect_to_static_node(conn_str)
-        .connect_to_cluster_through_gossip(setts);
-        // .unwrap();
+        .connect_to_static_node(conn_str)
+        // .connect_to_cluster_through_gossip(setts);
+        .unwrap();
 
     test_write_events(&connection);
     test_read_event(&connection);
