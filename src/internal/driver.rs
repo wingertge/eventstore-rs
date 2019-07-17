@@ -358,11 +358,15 @@ impl Driver {
         } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
             if let Some(req) = self.init_req_opt.take(){
                 if req.correlation == pkg.correlation {
-                    if pkg.cmd == Cmd::NotAuthenticated {
-                        warn!("Not authenticated.");
-                    }
+                    if let Some(conn) = self.candidate.as_ref() {
+                        if pkg.cmd == Cmd::NotAuthenticated {
+                            warn!("Connection {} is not authenticated.", conn.id);
+                        } else {
+                            info!("Connection {} is authenticated", conn.id);
+                        }
 
-                    self.identify_client();
+                        self.identify_client();
+                    }
                 }
             }
         } else if self.state == ConnectionState::Connected {

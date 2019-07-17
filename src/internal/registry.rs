@@ -479,11 +479,15 @@ impl Registry {
     }
 
     pub(crate) fn abort(&mut self) {
+        debug!("Enter arbort process…");
+
         abort(self);
 
         for op in self.awaiting.iter_mut() {
             op.failed(OperationError::Aborted);
         }
+
+        debug!("Abort process completed");
     }
 }
 
@@ -526,7 +530,7 @@ fn register_operation(registry: &mut Registry, conn: &Connection, operation: Ope
 
     match operation.issue_request(&mut registry.buffer, correlation) {
         Ok(pkg) => {
-            debug!("Issuing request {} for {:?}", pkg.correlation, pkg.cmd);
+            debug!("Issuing request {} for {:?} on connection {}", pkg.correlation, pkg.cmd, conn.id);
 
             let tracker = Tracker::new(pkg.cmd, conn.id, operation);
 
@@ -535,12 +539,12 @@ fn register_operation(registry: &mut Registry, conn: &Connection, operation: Ope
         },
 
         Err(e) => {
-            error!("Exception occured when issuing a request: {}", e);
+            error!("Exception occured when issuing a request on connection {}: {}", conn.id, e);
         }
     }
 }
 
-fn retry_operation(registry: &mut Registry, conn: &Connection, mut tracker: Tracker, correlation: Uuid)
+fn retry_operation_without_register(registry: &mut Registry, conn: &Connection, tracker: &mut Tracker, correlation: Uuid)
     -> io::Result<()>
 {
     if tracker.attempts + 1 >= tracker.operation.max_retry {
@@ -555,6 +559,14 @@ fn retry_operation(registry: &mut Registry, conn: &Connection, mut tracker: Trac
     tracker.conn_id = conn.id;
 
     conn.enqueue(pkg);
+
+    Ok(())
+}
+
+fn retry_operation(registry: &mut Registry, conn: &Connection, mut tracker: Tracker, correlation: Uuid)
+    -> io::Result<()>
+{
+    retry_operation_without_register(registry, conn, &mut tracker, correlation)?;
     registry.pendings.insert(correlation, tracker);
 
     Ok(())
@@ -700,31 +712,75 @@ fn handle_pkg(registry: &mut Registry, conn: &Connection, pkg: Pkg) -> Option<ty
 fn check_and_retry(registry: &mut Registry, conn: &Connection) {
     use std::mem;
 
-    let pendings = mem::replace(&mut registry.pendings, HashMap::new());
+    struct Update {
+        previous_key: Uuid,
+        new_key: Uuid,
+    }
 
-    for (key, mut tracker) in pendings {
+    let mut pendings = mem::replace(&mut registry.pendings, HashMap::new());
+    let mut dropped_new_packages = vec![];
+
+    pendings.retain(|key, tracker|
+    {
         if tracker.conn_id != conn.id {
             match tracker.operation.connection_has_dropped(&mut registry.buffer, tracker.cmd) {
                 Ok(pkg_opt) => {
                     if let Some(pkg) = pkg_opt {
+                        let upd = Update {
+                            previous_key: *key,
+                            new_key: pkg.correlation,
+                        };
+
                         tracker.cmd = pkg.cmd;
 
+                        dropped_new_packages.push(upd);
                         tracker.reuse(conn);
-                        registry.pendings.insert(pkg.correlation, tracker);
                         conn.enqueue(pkg);
+
+                        return true;
                     }
+
+                    return false;
                 },
 
                 Err(error) => {
-                    error!("Error on connection_has_dropped function: {}", error);
+                    error!(
+                        "Error on connection_has_dropped function for operation {} {:?}: {}",
+                        key, tracker.cmd, error
+                    );
 
                     tracker.operation.failed(OperationError::Aborted);
+
+                    return false;
                 },
             }
+        } else if tracker.has_timeout(tracker.operation.timeout) {
+            if let Err(error) = retry_operation_without_register(registry, conn, tracker, *key) {
+                error!(
+                    "Error when retrying operation {} {:?} during check_and_retry process: {}",
+                    key, tracker.cmd, error
+                );
+
+                return false;
+            }
+        }
+
+        true
+    });
+
+    // We update the registry so the packages that were emitted on `connection_has_dropped`
+    // are associated to the right tracker.
+    for upd in dropped_new_packages {
+        if let Some(tracker) = pendings.remove(&upd.previous_key) {
+            pendings.insert(upd.new_key, tracker);
         }
     }
+
+    mem::replace(&mut registry.pendings, pendings);
 }
 
 fn abort(registry: &mut Registry) {
-
+    for (_, mut tracker) in registry.pendings.drain() {
+        tracker.operation.failed(OperationError::Aborted);
+    }
 }

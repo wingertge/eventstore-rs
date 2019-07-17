@@ -460,6 +460,8 @@ impl Connection {
     ///
     /// `shutdown` blocks the current thread.
     pub fn shutdown(self) {
+        info!("User ask for closing the connection");
+
         self.sender.send(Msg::Shutdown).wait().unwrap();
         self.shutdown.wait().unwrap();
     }
