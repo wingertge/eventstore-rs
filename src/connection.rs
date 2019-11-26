@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Receiver, Sender, channel };
+use futures::channel::mpsc::{ Receiver, Sender, channel };
 use tokio::runtime::{ Runtime, Shutdown };
 
 use crate::discovery;

@@ -3,7 +3,7 @@ use std::io::{ Error, ErrorKind };
 use std::time::{ Duration, Instant };
 
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::Sender;
+use futures::channel::mpsc::Sender;
 use tokio::spawn;
 use tokio::timer::Interval;
 use uuid::Uuid;

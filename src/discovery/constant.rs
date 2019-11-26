@@ -2,12 +2,15 @@ use crate::internal::messaging::Msg;
 use crate::types::Endpoint;
 use futures::future;
 use futures::prelude::{ Future, Stream, Sink };
-use futures::sync::mpsc;
-use tokio::spawn;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 
-pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)
-    -> impl Future<Item=(), Error=()>
-{
+pub(crate) async fn discover(
+    consumer: mpsc::Receiver<Option<Endpoint>>,
+    sender: mpsc::Sender<Msg>,
+    endpoint: Endpoint,
+) {
     struct State {
         sender: mpsc::Sender<Msg>,
         endpoint: Endpoint,
@@ -19,16 +22,13 @@ pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc:
             endpoint,
         };
 
-    consumer.fold(initial, |state, _|
+    consumer.fold(initial, async move |state, _|
     {
-        let send_endpoint =
-            state.sender
-                .clone()
-                .send(Msg::Establish(state.endpoint))
-                .then(|_| Ok(()));
+        state.sender
+            .clone()
+            .send(Msg::Establish(state.endpoint))
+            .await;
 
-        spawn(send_endpoint);
-
-        future::ok(state)
-    }).map(|_| ())
+        state
+    }).await;
 }

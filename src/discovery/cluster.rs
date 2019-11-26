@@ -2,7 +2,9 @@ use crate::internal::messaging::Msg;
 use crate::types::{ Endpoint, NodePreference, GossipSeed, GossipSeedClusterSettings };
 use futures::future::{ self, Loop };
 use futures::prelude::{ Future, Stream, Sink, IntoFuture };
-use futures::sync::mpsc;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use rand;
 use rand::seq::SliceRandom;
 use std::iter::FromIterator;
@@ -13,9 +15,11 @@ use tokio::spawn;
 use tokio_timer::sleep;
 use uuid::Uuid;
 
-pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: GossipSeedClusterSettings)
-    -> impl Future<Item=(), Error=()>
-{
+pub(crate) async fn discover(
+    consumer: mpsc::Receiver<Option<Endpoint>>,
+    sender: mpsc::Sender<Msg>,
+    settings: GossipSeedClusterSettings,
+) {
     struct State {
         settings: GossipSeedClusterSettings,
         client: reqwest::r#async::Client,
@@ -35,9 +39,10 @@ pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc:
             candidates: vec![].into_iter(),
         };
 
-    fn discover(mut state: State, failed_endpoint: Option<Endpoint>)
-        -> impl Future<Item=(Option<NodeEndpoints>, State), Error=()>
-    {
+    async fn discover(
+        mut state: State,
+        failed_endpoint: Option<Endpoint>,
+    ) -> (Option<NodeEndpoints>, State) {
         let candidates = match state.previous_candidates.take() {
             Some(old_candidates) =>
                 candidates_from_old_gossip(failed_endpoint, old_candidates),
@@ -358,9 +363,10 @@ pub(crate) struct NodeEndpoints {
     pub secure_tcp_endpoint: Option<Endpoint>,
 }
 
-fn get_gossip_from(client: reqwest::r#async::Client, gossip: GossipSeed)
-    -> impl Future<Item=Vec<MemberInfo>, Error=std::io::Error>
-{
+async fn get_gossip_from(
+    client: reqwest::r#async::Client,
+    gossip: GossipSeed,
+) -> Vec<MemberInfo> {
     gossip.url()
         .into_future()
         .and_then(move |url|
@@ -416,11 +422,4 @@ fn determine_best_node(preference: NodePreference, members: &[Member])
             secure_tcp_endpoint: member.external_secure_tcp.map(Endpoint::from_addr),
         }
     })
-}
-
-fn boxed_future<F: 'static>(future: F)
-    -> Box<dyn Future<Item=F::Item, Error=F::Error> + Send>
-        where F: Future + Send
-{
-    Box::new(future)
 }

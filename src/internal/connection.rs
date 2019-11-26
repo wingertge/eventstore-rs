@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 
 use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Sender, channel };
+use futures::channel::mpsc::{ Sender, channel };
 use futures::stream::iter_ok;
 use tokio::spawn;
 use tokio::codec::{ Decoder, Encoder };
