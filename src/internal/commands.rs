@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Deref;
 
-use futures::sync::mpsc::{ self, Sender };
+// use futures::sync::mpsc::{ self, Sender };
+use futures_3::channel::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream, Poll, Async };
 use protobuf::Chars;
 use serde::ser::SerializeSeq;

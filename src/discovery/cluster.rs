@@ -13,6 +13,17 @@ use tokio::spawn;
 use tokio_timer::sleep;
 use uuid::Uuid;
 
+fn gossip_seed_url(seed: GossipSeed) -> std::io::Result<reqwest::Url> {
+    let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
+
+    reqwest::Url::parse(&url_str)
+        .map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Wrong url [{}]: {}", url_str, error))
+        })
+}
+
 pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: GossipSeedClusterSettings)
     -> impl Future<Item=(), Error=()>
 {
@@ -361,7 +372,7 @@ pub(crate) struct NodeEndpoints {
 fn get_gossip_from(client: reqwest::r#async::Client, gossip: GossipSeed)
     -> impl Future<Item=Vec<MemberInfo>, Error=std::io::Error>
 {
-    gossip.url()
+    gossip_seed_url(gossip)
         .into_future()
         .and_then(move |url|
         {

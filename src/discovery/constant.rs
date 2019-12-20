@@ -1,8 +1,10 @@
 use crate::internal::messaging::Msg;
 use crate::types::Endpoint;
 use futures::future;
-use futures::prelude::{ Future, Stream, Sink };
-use futures::sync::mpsc;
+use futures_3::prelude::{ Future, Stream, Sink };
+// use futures::prelude::{ Future, Stream, Sink };
+use futures_3::channel::mpsc;
+// use futures::sync::mpsc;
 use tokio::spawn;
 
 pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, endpoint: Endpoint)

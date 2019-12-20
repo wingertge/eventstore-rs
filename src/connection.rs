@@ -1,13 +1,17 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Receiver, Sender, channel };
-use tokio::runtime::{ Runtime, Shutdown };
+// use futures::{ Future, Stream, Sink };
+use futures_3::prelude::{ Future, Stream, Sink };
+use futures_3::channel::mpsc::{ Receiver, Sender, channel };
+// use futures::sync::mpsc::{ Receiver, Sender, channel };
+use tokio_2::runtime::{ Runtime, Shutdown };
+use tokio_2::spawn;
+// use tokio::runtime::{ Runtime, Shutdown };
 
 use crate::discovery;
 use crate::internal::driver::{ Driver, Report };
-use crate::internal::messaging::Msg;
+// use crate::internal::messaging::Msg;
 use crate::internal::commands;
 use crate::internal::operations::OperationError;
 use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
@@ -26,7 +30,7 @@ use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
 /// in this way.
 pub struct Connection {
     shutdown: Option<Shutdown>,
-    sender: Sender<Msg>,
+    // sender: Sender<Msg>,
     settings: Settings,
 }
 
@@ -130,82 +134,82 @@ impl ConnectionBuilder {
 
 const DEFAULT_BOX_SIZE: usize = 500;
 
-fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
-    -> impl Future<Item=(), Error=()>
-{
-    #[derive(Debug)]
-    enum State {
-        Live,
-        Clearing,
-    }
+// fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
+//     -> impl Future<Item=(), Error=()>
+// {
+//     #[derive(Debug)]
+//     enum State {
+//         Live,
+//         Clearing,
+//     }
 
-    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver)
-        -> Result<State, E>
-    {
-        driver.close_connection();
+//     fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver)
+//         -> Result<State, E>
+//     {
+//         driver.close_connection();
 
-        let action = sender
-            .clone()
-            .send(Msg::Marker)
-            .map(|_| ())
-            .map_err(|_| ());
+//         let action = sender
+//             .clone()
+//             .send(Msg::Marker)
+//             .map(|_| ())
+//             .map_err(|_| ());
 
-        tokio::spawn(action);
+//         spawn(action);
 
-        info!("Closing the connection...");
-        info!("Start clearing uncomplete operations...");
+//         info!("Closing the connection...");
+//         info!("Start clearing uncomplete operations...");
 
-        Ok(State::Clearing)
-    }
+//         Ok(State::Clearing)
+//     }
 
-    recv.fold(State::Live, move |acc, msg| {
-        debug!("Bus loop received state {:?}: {:?}", acc, msg);
+//     recv.fold(State::Live, move |acc, msg| {
+//         debug!("Bus loop received state {:?}: {:?}", acc, msg);
 
-        if let State::Live = &acc {
-            match msg {
-                Msg::Start => driver.start(),
-                Msg::Establish(endpoint) => driver.on_establish(endpoint),
-                Msg::Established(id)  => driver.on_established(id),
-                Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, &error),
-                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
-                Msg::NewOp(op) => driver.on_new_op(op),
-                Msg::Send(pkg) => driver.on_send_pkg(pkg),
+//         if let State::Live = &acc {
+//             match msg {
+//                 Msg::Start => driver.start(),
+//                 Msg::Establish(endpoint) => driver.on_establish(endpoint),
+//                 Msg::Established(id)  => driver.on_established(id),
+//                 Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, &error),
+//                 Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
+//                 Msg::NewOp(op) => driver.on_new_op(op),
+//                 Msg::Send(pkg) => driver.on_send_pkg(pkg),
 
-                Msg::Tick => {
-                    if let Report::Quit = driver.on_tick() {
-                        return start_closing(&sender, &mut driver);
-                    }
-                },
+//                 Msg::Tick => {
+//                     if let Report::Quit = driver.on_tick() {
+//                         return start_closing(&sender, &mut driver);
+//                     }
+//                 },
 
-                // It's impossible to receive `Msg::Marker` at `State::Live` state.
-                // However we can hit two birds with one stone with pattern-matching
-                // coverage checker.
-                Msg::Shutdown | Msg::Marker => {
-                    info!("User-shutdown request received.");
+//                 // It's impossible to receive `Msg::Marker` at `State::Live` state.
+//                 // However we can hit two birds with one stone with pattern-matching
+//                 // coverage checker.
+//                 Msg::Shutdown | Msg::Marker => {
+//                     info!("User-shutdown request received.");
 
-                    return start_closing(&sender, &mut driver);
-                },
-            }
-        } else {
-            match msg {
-                Msg::NewOp(mut op) => op.failed(OperationError::Aborted),
-                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
-                Msg::Marker => {
-                    // We've reached the end of our checkpoint, we can properly
-                    // aborts uncompleted operations.
-                    driver.abort();
-                    info!("Connection closed properly.");
+//                     return start_closing(&sender, &mut driver);
+//                 },
+//             }
+//         } else {
+//             match msg {
+//                 Msg::NewOp(mut op) => op.failed(OperationError::Aborted),
+//                 Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
+//                 Msg::Marker => {
+//                     // We've reached the end of our checkpoint, we can properly
+//                     // aborts uncompleted operations.
+//                     driver.abort();
+//                     info!("Connection closed properly.");
 
-                    return Err(());
-                },
+//                     return Err(());
+//                 },
 
-                _ => {},
-            }
-        }
+//                 _ => {},
+//             }
+//         }
 
-        Ok(acc)
-    }).map(|_| ())
-}
+//         Ok(acc)
+//     }).map(|_| ())
+// }
 
 enum DiscoveryProcess {
     Static(SocketAddr),
@@ -244,34 +248,34 @@ impl Connection {
         }
     }
 
-    fn initialize(settings: &Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Sender<Msg> {
-        let (sender, recv) = channel(DEFAULT_BOX_SIZE);
-        let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
-        let cloned_sender = sender.clone();
-        let driver = Driver::new(&settings, start_discovery, sender.clone());
+    // fn initialize(settings: &Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Sender<Msg> {
+    //     let (sender, recv) = channel(DEFAULT_BOX_SIZE);
+    //     let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
+    //     let cloned_sender = sender.clone();
+    //     let driver = Driver::new(&settings, start_discovery, sender.clone());
 
-        match discovery {
-            DiscoveryProcess::Static(addr) => {
-                let endpoint = types::Endpoint::from_addr(addr);
-                let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
+    //     match discovery {
+    //         DiscoveryProcess::Static(addr) => {
+    //             let endpoint = types::Endpoint::from_addr(addr);
+    //             let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
 
-                runtime.spawn(action);
-            },
+    //             runtime.spawn(action);
+    //         },
 
-            DiscoveryProcess::ClusterThroughGossip(setts) => {
-                let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
+    //         DiscoveryProcess::ClusterThroughGossip(setts) => {
+    //             // let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
 
-                runtime.spawn(action);
-            },
-        };
+    //             // runtime.spawn(action);
+    //         },
+    //     };
 
-        let action = connection_state_machine(cloned_sender, recv, driver);
-        let _ = runtime.spawn(action);
-        sender
-    }
+    //     let action = connection_state_machine(cloned_sender, recv, driver);
+    //     let _ = runtime.spawn(action);
+    //     sender
+    // }
 
     fn start(&self) {
-        self.sender.clone().send(Msg::Start).wait().unwrap();
+        // self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
     /// Sends events to a given stream.
@@ -412,7 +416,7 @@ impl Connection {
     ///
     /// `shutdown` blocks the current thread.
     pub fn shutdown(self) {
-        self.sender.send(Msg::Shutdown).wait().unwrap();
+        // self.sender.send(Msg::Shutdown).wait().unwrap();
         self.shutdown.wait().unwrap();
     }
 }

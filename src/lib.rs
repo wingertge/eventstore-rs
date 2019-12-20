@@ -18,7 +18,7 @@ pub use connection::{
 
 pub use internal::{
     commands,
-    operations::OperationError
+    // operations::OperationError
 };
 
 pub use types::*;

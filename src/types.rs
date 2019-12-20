@@ -8,9 +8,12 @@ use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
 use futures::{ Future, Stream, Sink };
-use futures::stream::iter_ok;
-use futures::sync::mpsc::{ Receiver, Sender };
-use futures::sync::oneshot;
+use futures_3::stream::iter;
+// use futures::stream::iter_ok;
+use futures_3::channel::mpsc::{ Receiver, Sender };
+// use futures::sync::mpsc::{ Receiver, Sender };
+use futures_3::channel::oneshot;
+// use futures::sync::oneshot;
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
@@ -18,9 +21,9 @@ use serde_json;
 use uuid::{ Uuid, BytesError };
 
 use crate::internal::command::Cmd;
-use crate::internal::messages;
-use crate::internal::messaging::Msg;
-use crate::internal::package::Pkg;
+// use crate::internal::messages;
+// use crate::internal::messaging::Msg;
+// use crate::internal::package::Pkg;
 
 /// Represents a reconnection strategy when a connection has dropped or is
 /// about to be created.
@@ -736,42 +739,43 @@ impl EventData {
         EventData { metadata_payload_opt: content_bin, ..self }
     }
 
-    pub(crate) fn build(self) -> messages::NewEvent {
-        let mut new_event = messages::NewEvent::new();
-        let     id        = self.id_opt.unwrap_or_else(Uuid::new_v4);
+    // pub(crate) fn build(self) -> messages::NewEvent {
+    //     // let mut new_event = messages::NewEvent::new();
+    //     let     id        = self.id_opt.unwrap_or_else(Uuid::new_v4);
 
-        new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
+    //     new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
 
-        match self.payload {
-            Payload::Json(bin) => {
-                new_event.set_data_content_type(1);
-                new_event.set_data(bin);
-            },
+    //     match self.payload {
+    //         Payload::Json(bin) => {
+    //             // new_event.set_data_content_type(1);
+    //             // new_event.set_data(bin);
+    //         },
 
-            Payload::Binary(bin) => {
-                new_event.set_data_content_type(0);
-                new_event.set_data(bin);
-            },
-        }
+    //         Payload::Binary(bin) => {
+    //             // new_event.set_data_content_type(0);
+    //             // new_event.set_data(bin);
+    //         },
+    //     }
 
-        match self.metadata_payload_opt {
-            Some(Payload::Json(bin)) => {
-                new_event.set_metadata_content_type(1);
-                new_event.set_metadata(bin);
-            },
+    //     match self.metadata_payload_opt {
+    //         Some(Payload::Json(bin)) => {
+    //             // new_event.set_metadata_content_type(1);
+    //             // new_event.set_metadata(bin);
+    //         },
 
-            Some(Payload::Binary(bin)) => {
-                new_event.set_metadata_content_type(0);
-                new_event.set_metadata(bin);
-            },
+    //         Some(Payload::Binary(bin)) => {
+    //             // new_event.set_metadata_content_type(0);
+    //             // new_event.set_metadata(bin);
+    //         },
 
-            None => new_event.set_metadata_content_type(0),
-        }
+    //         // None => new_event.set_metadata_content_type(0),
+    //         None => {},
+    //     }
 
-        new_event.set_event_type(self.event_type);
+    //     // new_event.set_event_type(self.event_type);
 
-        new_event
-    }
+    //     new_event
+    // }
 }
 
 /// Used to facilitate the creation of a stream's metadata.
@@ -996,22 +1000,22 @@ pub enum NakAction {
     Stop,
 }
 
-impl NakAction {
-    fn build_internal_nak_action(self)
-        -> messages::PersistentSubscriptionNakEvents_NakAction
-    {
-        match self {
-            NakAction::Unknown => messages::PersistentSubscriptionNakEvents_NakAction::Unknown,
-            NakAction::Retry   => messages::PersistentSubscriptionNakEvents_NakAction::Retry,
-            NakAction::Skip    => messages::PersistentSubscriptionNakEvents_NakAction::Skip,
-            NakAction::Park    => messages::PersistentSubscriptionNakEvents_NakAction::Park,
-            NakAction::Stop    => messages::PersistentSubscriptionNakEvents_NakAction::Stop,
-        }
-    }
-}
+// impl NakAction {
+//     fn build_internal_nak_action(self)
+//         -> messages::PersistentSubscriptionNakEvents_NakAction
+//     {
+//         match self {
+//             NakAction::Unknown => messages::PersistentSubscriptionNakEvents_NakAction::Unknown,
+//             NakAction::Retry   => messages::PersistentSubscriptionNakEvents_NakAction::Retry,
+//             NakAction::Skip    => messages::PersistentSubscriptionNakEvents_NakAction::Skip,
+//             NakAction::Park    => messages::PersistentSubscriptionNakEvents_NakAction::Park,
+//             NakAction::Stop    => messages::PersistentSubscriptionNakEvents_NakAction::Stop,
+//         }
+//     }
+// }
 
 fn on_event<C>(
-    sender: &Sender<Msg>,
+    // sender: &Sender<Msg>,
     state: &mut State<C>,
     event: SubEvent
 ) -> OnEvent
@@ -1035,9 +1039,9 @@ fn on_event<C>(
                     let acks = env.acks;
 
                     if !acks.is_empty() {
-                        let mut msg = messages::PersistentSubscriptionAckEvents::new();
+                        // let mut msg = messages::PersistentSubscriptionAckEvents::new();
 
-                        msg.set_subscription_id(sub_id.as_str().into());
+                        // msg.set_subscription_id(sub_id.as_str().into());
 
                         for id in acks {
                             // Reserves enough to store an UUID (which is 16 bytes long).
@@ -1045,16 +1049,16 @@ fn on_event<C>(
                             state.buffer.put_slice(id.as_bytes());
 
                             let bytes = state.buffer.take().freeze();
-                            msg.mut_processed_event_ids().push(bytes);
+                            // msg.mut_processed_event_ids().push(bytes);
                         }
 
-                        let pkg = Pkg::from_message(
-                            Cmd::PersistentSubscriptionAckEvents,
-                            None,
-                            &msg
-                        ).unwrap();
+                        // let pkg = Pkg::from_message(
+                        //     Cmd::PersistentSubscriptionAckEvents,
+                        //     None,
+                        //     &msg
+                        // ).unwrap();
 
-                        sender.clone().send(Msg::Send(pkg)).wait().unwrap();
+                        // sender.clone().send(Msg::Send(pkg)).wait().unwrap();
                     }
 
                     let naks     = env.naks;
@@ -1062,10 +1066,10 @@ fn on_event<C>(
 
                     if !naks.is_empty() {
                         for naked in naks {
-                            let mut msg       = messages::PersistentSubscriptionNakEvents::new();
+                            // let mut msg       = messages::PersistentSubscriptionNakEvents::new();
                             let mut bytes_vec = Vec::with_capacity(naked.ids.len());
 
-                            msg.set_subscription_id(sub_id.as_str().into());
+                            // msg.set_subscription_id(sub_id.as_str().into());
 
                             for id in naked.ids {
                                 // Reserves enough to store an UUID (which is 16 bytes long).
@@ -1076,21 +1080,21 @@ fn on_event<C>(
                                 bytes_vec.push(bytes);
                             }
 
-                            msg.set_processed_event_ids(bytes_vec);
-                            msg.set_message(naked.message);
-                            msg.set_action(naked.action.build_internal_nak_action());
+                            // msg.set_processed_event_ids(bytes_vec);
+                            // msg.set_message(naked.message);
+                            // msg.set_action(naked.action.build_internal_nak_action());
 
-                            let pkg = Pkg::from_message(
-                                Cmd::PersistentSubscriptionAckEvents,
-                                None,
-                                &msg
-                            ).unwrap();
+                            // let pkg = Pkg::from_message(
+                            //     Cmd::PersistentSubscriptionAckEvents,
+                            //     None,
+                            //     &msg
+                            // ).unwrap();
 
-                            pkgs.push(pkg);
+                            // pkgs.push(pkg);
                         }
 
-                        let pkgs = pkgs.into_iter().map(Msg::Send);
-                        let _ = sender.clone().send_all(iter_ok(pkgs)).wait().unwrap();
+                        // let pkgs = pkgs.into_iter().map(Msg::Send);
+                        // let _ = sender.clone().send_all(iter(pkgs)).wait().unwrap();
                     }
 
                     decision
@@ -1103,9 +1107,9 @@ fn on_event<C>(
 
             if let OnEventAppeared::Drop = decision {
                 let id  = state.confirmation_id.expect("impossible situation when dropping subscription");
-                let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
+                // let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
 
-                sender.clone().send(Msg::Send(pkg)).wait().unwrap();
+                // sender.clone().send(Msg::Send(pkg)).wait().unwrap();
                 return OnEvent::Stop;
             }
         },
@@ -1131,7 +1135,7 @@ fn on_event<C>(
 pub struct Subscription {
     pub(crate) inner: Sender<SubEvent>,
     pub(crate) receiver: Receiver<SubEvent>,
-    pub(crate) sender: Sender<Msg>,
+    // pub(crate) sender: Sender<Msg>,
 }
 
 impl Subscription {
@@ -1509,16 +1513,6 @@ impl GossipSeed {
 
     pub(crate) fn from_socket_addr(addr: SocketAddr) -> GossipSeed {
         GossipSeed::from_endpoint(Endpoint::from_addr(addr))
-    }
-
-    pub(crate) fn url(self) -> std::io::Result<reqwest::Url> {
-        let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
-
-        reqwest::Url::parse(&url_str)
-            .map_err(|error|
-            {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Wrong url [{}]: {}", url_str, error))
-            })
     }
 }
 

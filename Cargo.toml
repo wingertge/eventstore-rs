@@ -29,24 +29,27 @@ cargo-features = ["rename-dependency"]
 default = ["es6"] # ["es5-and-below"]
 es6 = [
   "tonic",
-  "mio"
+  "mio",
+  "futures_3",
+  "tokio_2"
 ]
 
 es5-and-below = [
   "tokio",
   "tokio-timer",
   "futures",
-  "bytes",
   "protobuf",
   "reqwest"
 ]
 
 [dependencies]
 tokio = { version = "0.1", optional = true }
+tokio_2 = { package = "tokio", version = "^0.2", optional = true }
 tokio-timer = { version = "0.2", optional = true }
 futures = { version = "0.1", optional = true }
+futures_3 = { package = "futures", version = "0.3", optional = true }
 uuid = { version  = "0.7", features = [ "v4", "serde" ] }
-bytes = { version = "0.4", optional = true }
+bytes = "0.5"
 protobuf = { version = "2.8", features = ["with-bytes"], optional = true }
 serde = "1.0"
 serde_json = "1.0"
@@ -55,12 +58,12 @@ log = "0.4"
 reqwest = { version = "0.9", optional = true }
 vec1 = "1.4"
 rand = "0.7"
-tonic = { git = "https://github.com/hyperium/tonic.git", rev = "6566b237a1dc80922ba1b54b0beb037b23f15ede", optional = true }
+tonic = { version = "0.1.0-beta.1", optional = true }
 mio = { version = "0.6.21", optional = true }
 
 [build-dependencies]
 # protoc-rust = "2.8"
-tonic-build = { git = "https://github.com/hyperium/tonic.git", rev = "6566b237a1dc80922ba1b54b0beb037b23f15ede" }
+tonic-build = "0.1.0-beta.1"
 
 [[test]]
 name = "integration"
