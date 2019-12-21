@@ -7,14 +7,15 @@ use std::ops::Deref;
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
-use futures::{ Future, Stream, Sink };
+// use futures::{ Future, Stream, Sink };
+use futures_3::prelude::{ Future, Stream, Sink };
 use futures_3::stream::iter;
 // use futures::stream::iter_ok;
 use futures_3::channel::mpsc::{ Receiver, Sender };
 // use futures::sync::mpsc::{ Receiver, Sender };
 use futures_3::channel::oneshot;
 // use futures::sync::oneshot;
-use protobuf::Chars;
+// use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
@@ -325,46 +326,46 @@ fn decode_bytes_error(err: BytesError) -> ::std::io::Error {
 }
 
 impl RecordedEvent {
-    pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
-        let event_stream_id = event.take_event_stream_id().deref().to_owned();
-        let event_id        = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
-        let event_number    = event.get_event_number();
-        let event_type      = event.take_event_type().deref().to_owned();
-        let data            = event.take_data();
-        let metadata        = event.take_metadata();
+    // pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
+    //     let event_stream_id = event.take_event_stream_id().deref().to_owned();
+    //     let event_id        = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
+    //     let event_number    = event.get_event_number();
+    //     let event_type      = event.take_event_type().deref().to_owned();
+    //     let data            = event.take_data();
+    //     let metadata        = event.take_metadata();
 
-        let created = {
-            if event.has_created() {
-                Some(event.get_created())
-            } else {
-                None
-            }
-        };
+    //     let created = {
+    //         if event.has_created() {
+    //             Some(event.get_created())
+    //         } else {
+    //             None
+    //         }
+    //     };
 
-        let created_epoch = {
-            if event.has_created_epoch() {
-                Some(event.get_created_epoch())
-            } else {
-                None
-            }
-        };
+    //     let created_epoch = {
+    //         if event.has_created_epoch() {
+    //             Some(event.get_created_epoch())
+    //         } else {
+    //             None
+    //         }
+    //     };
 
-        let is_json = event.get_data_content_type() == 1;
+    //     let is_json = event.get_data_content_type() == 1;
 
-        let record = RecordedEvent {
-            event_stream_id,
-            event_id,
-            event_number,
-            event_type,
-            data,
-            metadata,
-            created,
-            created_epoch,
-            is_json,
-        };
+    //     let record = RecordedEvent {
+    //         event_stream_id,
+    //         event_id,
+    //         event_number,
+    //         event_type,
+    //         data,
+    //         metadata,
+    //         created,
+    //         created_epoch,
+    //         is_json,
+    //     };
 
-        Ok(record)
-    }
+    //     Ok(record)
+    // }
 
     /// Tries to decode this event payload as a JSON object.
     pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
@@ -389,70 +390,70 @@ pub struct ResolvedEvent {
 }
 
 impl ResolvedEvent {
-    pub(crate) fn new(mut msg: messages::ResolvedEvent) -> ::std::io::Result<ResolvedEvent> {
-        let event = {
-            if msg.has_event() {
-                let record = RecordedEvent::new(msg.take_event())?;
-                Ok(Some(record))
-            } else {
-                Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
-            }
-        }?;
+    // pub(crate) fn new(mut msg: messages::ResolvedEvent) -> ::std::io::Result<ResolvedEvent> {
+    //     let event = {
+    //         if msg.has_event() {
+    //             let record = RecordedEvent::new(msg.take_event())?;
+    //             Ok(Some(record))
+    //         } else {
+    //             Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
+    //         }
+    //     }?;
 
-        let link = {
-            if msg.has_link() {
-                let record = RecordedEvent::new(msg.take_link())?;
-                Ok(Some(record))
-            } else {
-                Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
-            }
-        }?;
+    //     let link = {
+    //         if msg.has_link() {
+    //             let record = RecordedEvent::new(msg.take_link())?;
+    //             Ok(Some(record))
+    //         } else {
+    //             Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
+    //         }
+    //     }?;
 
-        let position = Position {
-            commit: msg.get_commit_position(),
-            prepare: msg.get_prepare_position(),
-        };
+    //     let position = Position {
+    //         commit: msg.get_commit_position(),
+    //         prepare: msg.get_prepare_position(),
+    //     };
 
-        let position = Some(position);
+    //     let position = Some(position);
 
-        let resolved = ResolvedEvent {
-            event,
-            link,
-            position,
-        };
+    //     let resolved = ResolvedEvent {
+    //         event,
+    //         link,
+    //         position,
+    //     };
 
-        Ok(resolved)
-    }
+    //     Ok(resolved)
+    // }
 
-    pub(crate) fn new_from_indexed(mut msg: messages::ResolvedIndexedEvent) -> ::std::io::Result<ResolvedEvent> {
-        let event = {
-            if msg.has_event() {
-                let record = RecordedEvent::new(msg.take_event())?;
-                Ok(Some(record))
-            } else {
-                Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
-            }
-        }?;
+    // pub(crate) fn new_from_indexed(mut msg: messages::ResolvedIndexedEvent) -> ::std::io::Result<ResolvedEvent> {
+    //     let event = {
+    //         if msg.has_event() {
+    //             let record = RecordedEvent::new(msg.take_event())?;
+    //             Ok(Some(record))
+    //         } else {
+    //             Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
+    //         }
+    //     }?;
 
-        let link = {
-            if msg.has_link() {
-                let record = RecordedEvent::new(msg.take_link())?;
-                Ok(Some(record))
-            } else {
-                Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
-            }
-        }?;
+    //     let link = {
+    //         if msg.has_link() {
+    //             let record = RecordedEvent::new(msg.take_link())?;
+    //             Ok(Some(record))
+    //         } else {
+    //             Ok::<Option<RecordedEvent>, ::std::io::Error>(None)
+    //         }
+    //     }?;
 
-        let position = None;
+    //     let position = None;
 
-        let resolved = ResolvedEvent {
-            event,
-            link,
-            position,
-        };
+    //     let resolved = ResolvedEvent {
+    //         event,
+    //         link,
+    //         position,
+    //     };
 
-        Ok(resolved)
-    }
+    //     Ok(resolved)
+    // }
 
     /// If it's a link event with its associated resolved event.
     pub fn is_resolved(&self) -> bool {
@@ -681,7 +682,7 @@ enum Payload {
 
 /// Holds data of event about to be sent to the server.
 pub struct EventData {
-    event_type: Chars,
+    // event_type: Chars,
     payload: Payload,
     id_opt: Option<Uuid>,
     metadata_payload_opt: Option<Payload>,
@@ -1162,7 +1163,7 @@ impl Subscription {
     }
 
     /// Consumes asynchronously the events comming from a subscription.
-    pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
+    pub fn consume_async<C>(self, init: C) -> impl Future<Output=C>
         where C: SubscriptionConsumer
     {
         let sender = self.sender.clone();
@@ -1200,7 +1201,7 @@ pub enum OnEventAppeared {
 struct NakedEvents {
     ids: Vec<Uuid>,
     action: NakAction,
-    message: Chars,
+    // message: Chars,
 }
 
 /// Set of operations supported when consumming events from a subscription.

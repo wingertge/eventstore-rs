@@ -1,4 +1,5 @@
 pub mod command;
+#[cfg(feature = "es5-and-below")]
 pub mod commands;
 #[cfg(feature = "es5-and-below")]
 pub mod connection;

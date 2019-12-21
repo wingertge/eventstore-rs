@@ -7,7 +7,7 @@ edition = "2018"
 # Uncomment if you want to update messages.rs code-gen.
 # We disabled codegen.rs because it requires having `protoc` installed on your machine
 # in order to build that library.
-# build = "codegen.rs"
+build = "codegen.rs"
 
 license = "MIT"
 description = "GetEventStore TCP client"
@@ -31,7 +31,9 @@ es6 = [
   "tonic",
   "mio",
   "futures_3",
-  "tokio_2"
+  "tokio_2",
+  "prost"
+  # "prost-derive"
 ]
 
 es5-and-below = [
@@ -44,7 +46,7 @@ es5-and-below = [
 
 [dependencies]
 tokio = { version = "0.1", optional = true }
-tokio_2 = { package = "tokio", version = "^0.2", optional = true }
+tokio_2 = { package = "tokio", version = "^0.2", features = ["macros"], optional = true }
 tokio-timer = { version = "0.2", optional = true }
 futures = { version = "0.1", optional = true }
 futures_3 = { package = "futures", version = "0.3", optional = true }
@@ -60,6 +62,8 @@ vec1 = "1.4"
 rand = "0.7"
 tonic = { version = "0.1.0-beta.1", optional = true }
 mio = { version = "0.6.21", optional = true }
+prost = { version = "0.5", optional = true }
+prost-derive = { version = "0.5", optional = true }
 
 [build-dependencies]
 # protoc-rust = "2.8"
