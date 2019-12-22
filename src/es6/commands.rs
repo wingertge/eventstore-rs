@@ -1,10 +1,24 @@
 use crate::es6::grpc::streams;
 use crate::es6::types::{ ResolvedEvent, RecordedEvent };
 use futures_3::stream::{ Stream, StreamExt };
+use uuid::Uuid;
 
 fn read_resp_to_resolved_event(
-    src: streams::ReadResp,
+    resp: streams::ReadResp,
 ) -> ResolvedEvent {
+    let resp = resp.event.expect("Will see later if it's a possible situation");
+    unimplemented!()
+}
+
+fn server_event_to_client_event(
+    src: streams::read_resp::read_event::RecordedEvent,
+) -> RecordedEvent {
+    unimplemented!()
+}
+
+fn raw_uuid_to_uuid(
+    src: streams::Uuid,
+) -> Uuid {
     unimplemented!()
 }
 

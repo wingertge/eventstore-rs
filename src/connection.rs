@@ -15,6 +15,7 @@ use tokio_2::spawn;
 // use crate::internal::commands;
 // use crate::internal::operations::OperationError;
 // use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
+use crate::es6::commands;
 use crate::es6::grpc::streams::streams_client;
 use crate::es6::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
 
@@ -32,6 +33,7 @@ use crate::es6::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettin
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
 pub struct Connection {
+    streams_client: streams_client::StreamsClient<tonic::transport::Channel>,
     // shutdown: Option<Shutdown>,
     // sender: Sender<Msg>,
     settings: Settings,
@@ -102,10 +104,19 @@ impl ConnectionBuilder {
 
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
-    pub fn single_node_connection(self, addr: SocketAddr) -> Connection {
-        // self.start_common_with_runtime(DiscoveryProcess::Static(addr), None)
-        // let stream_client = stream_client::StreamsClient::connect()
-        unimplemented!()
+    pub async fn single_node_connection(
+        self,
+        addr: SocketAddr
+    ) -> Result<Connection, tonic::transport::Error> {
+        let streams_client = streams_client::StreamsClient::connect(
+            format!("https://{}", addr)).await?;
+
+        let connection = Connection {
+            streams_client,
+            settings: self.settings,
+        };
+
+        Ok(connection)
     }
 
     /// Creates a connection to a single EventStore node. The connection will
@@ -302,6 +313,14 @@ impl Connection {
     //{
     //    commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata, &self.settings)
     //}
+
+    /// Reads events from a stream.
+    pub fn read_stream_events(
+        &self,
+        stream: String,
+    ) -> commands::ReadStreamEvents {
+        commands::ReadStreamEvents::new(self.streams_client.clone(), stream)
+    }
 
     ///// Reads a single event from a given stream.
     //pub fn read_event<S>(&self, stream: S, event_number: i64) -> commands::ReadEvent
