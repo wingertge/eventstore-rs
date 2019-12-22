@@ -15,7 +15,7 @@ use tokio_2::spawn;
 // use crate::internal::commands;
 // use crate::internal::operations::OperationError;
 // use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
-// use crate::es6::grpc::streams::stream_client;
+use crate::es6::grpc::streams::streams_client;
 use crate::es6::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
@@ -37,9 +37,9 @@ pub struct Connection {
     settings: Settings,
 }
 
-pub mod streams {
-    tonic::include_proto!("streams");
-}
+// pub mod streams {
+//     tonic::include_proto!("streams");
+// }
 
 /// Helps constructing a connection to the server.
 pub struct ConnectionBuilder {

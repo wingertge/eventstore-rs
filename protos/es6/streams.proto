@@ -13,17 +13,17 @@ message ReadReq {
 	Options options = 1;
 
 	message Options {
-		oneof stream_options {
+		oneof stream_option {
 			StreamOptions stream = 1;
 			AllOptions all = 2;
 		}
 		ReadDirection read_direction = 3;
 		bool resolve_links = 4;
-		oneof count_options {
+		oneof count_option {
 			int32 count = 5;
 			SubscriptionOptions subscription = 6;
 		}
-		oneof filter_options {
+		oneof filter_option {
 			FilterOptions filter = 7;
 			Empty no_filter = 8;
 		}
@@ -41,7 +41,7 @@ message ReadReq {
 			}
 		}
 		message AllOptions {
-			oneof all_options {
+			oneof all_option {
 				Position position = 1;
 				Empty start = 2;
 				Empty end = 3;

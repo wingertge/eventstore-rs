@@ -10,12 +10,12 @@ pub mod read_req {
         pub read_direction: i32,
         #[prost(bool, tag = "4")]
         pub resolve_links: bool,
-        #[prost(oneof = "options::StreamOptions", tags = "1, 2")]
-        pub stream_options: ::std::option::Option<options::StreamOptions>,
-        #[prost(oneof = "options::CountOptions", tags = "5, 6")]
-        pub count_options: ::std::option::Option<options::CountOptions>,
-        #[prost(oneof = "options::FilterOptions", tags = "7, 8")]
-        pub filter_options: ::std::option::Option<options::FilterOptions>,
+        #[prost(oneof = "options::StreamOption", tags = "1, 2")]
+        pub stream_option: ::std::option::Option<options::StreamOption>,
+        #[prost(oneof = "options::CountOption", tags = "5, 6")]
+        pub count_option: ::std::option::Option<options::CountOption>,
+        #[prost(oneof = "options::FilterOption", tags = "7, 8")]
+        pub filter_option: ::std::option::Option<options::FilterOption>,
     }
     pub mod options {
         #[derive(Clone, PartialEq, ::prost::Message)]
@@ -38,12 +38,12 @@ pub mod read_req {
         }
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct AllOptions {
-            #[prost(oneof = "all_options::AllOptions", tags = "1, 2, 3")]
-            pub all_options: ::std::option::Option<all_options::AllOptions>,
+            #[prost(oneof = "all_options::AllOption", tags = "1, 2, 3")]
+            pub all_option: ::std::option::Option<all_options::AllOption>,
         }
         pub mod all_options {
             #[derive(Clone, PartialEq, ::prost::Oneof)]
-            pub enum AllOptions {
+            pub enum AllOption {
                 #[prost(message, tag = "1")]
                 Position(super::Position),
                 #[prost(message, tag = "2")]
@@ -98,21 +98,21 @@ pub mod read_req {
             Backwards = 1,
         }
         #[derive(Clone, PartialEq, ::prost::Oneof)]
-        pub enum StreamOptions {
+        pub enum StreamOption {
             #[prost(message, tag = "1")]
             Stream(StreamOptions),
             #[prost(message, tag = "2")]
             All(AllOptions),
         }
         #[derive(Clone, PartialEq, ::prost::Oneof)]
-        pub enum CountOptions {
+        pub enum CountOption {
             #[prost(int32, tag = "5")]
             Count(i32),
             #[prost(message, tag = "6")]
             Subscription(SubscriptionOptions),
         }
         #[derive(Clone, PartialEq, ::prost::Oneof)]
-        pub enum FilterOptions {
+        pub enum FilterOption {
             #[prost(message, tag = "7")]
             Filter(FilterOptions),
             #[prost(message, tag = "8")]

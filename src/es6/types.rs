@@ -5,7 +5,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{ SocketAddr, ToSocketAddrs };
+use std::ops::Deref;
 use std::time::Duration;
+use uuid::Uuid;
 
 /// Represents a reconnection strategy when a connection has dropped or is
 /// about to be created.
@@ -491,5 +493,61 @@ impl GossipSeedClusterSettings {
             max_discover_attempts: max_attempt,
             ..self
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RecordedEvent {
+    /// The event stream that events belongs to.
+    pub event_stream_id: String,
+
+    /// Unique identifier representing this event.
+    pub event_id: Uuid,
+
+    /// Revision of this event in the stream.
+    pub event_revision: i64,
+
+    /// Type of this event.
+    pub event_type: String,
+
+    /// Payload of this event.
+    pub data: Vec<u8>,
+
+    /// Representing the metadata associated with this event.
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+/// A structure representing a single event or an resolved link event.
+#[derive(Debug)]
+pub struct ResolvedEvent {
+    /// The event, or the resolved link event if this `ResolvedEvent` is a link
+    /// event.
+    pub event: Option<RecordedEvent>,
+
+    /// The link event if this `ResolvedEvent` is a link event.
+    pub link: Option<RecordedEvent>,
+
+    /// Possible `Position` of that event in the server transaction file.
+    pub position: Option<Position>,
+}
+
+impl ResolvedEvent {
+    /// If it's a link event with its associated resolved event.
+    pub fn is_resolved(&self) -> bool {
+        self.event.is_some() && self.link.is_some()
+    }
+
+    /// Returns the event that was read or which triggered the subscription.
+    /// If this `ResolvedEvent` represents a link event, the link will be the
+    /// orginal event, otherwise it will be the event.
+    ///
+    /// TODO - It's impossible for `get_original_event` to be undefined.
+    pub fn get_original_event(&self) -> Option<&RecordedEvent> {
+        self.link.as_ref().or_else(|| self.event.as_ref())
+    }
+
+    /// Returns the stream id of the original event.
+    pub fn get_original_stream_id(&self) -> Option<&str> {
+        self.get_original_event().map(|event| event.event_stream_id.deref())
     }
 }

@@ -17,19 +17,19 @@
 // }
 //
 fn main() {
-    // let files = [
-    //     "protos/es6/persistent.proto",
-    //     "protos/es6/projections.proto",
-    //     "protos/es6/streams.proto",
-    //     "protos/es6/users.proto",
-    // ];
+    let files = [
+        "protos/es6/persistent.proto",
+        "protos/es6/projections.proto",
+        "protos/es6/streams.proto",
+        "protos/es6/users.proto",
+    ];
 
-    // tonic_build::configure()
-    //     .build_server(false)
-    //     .out_dir("src/es6/grpc")
-    //     .compile(&files, &["protos/es6"]).unwrap();
-    tonic_build::compile_protos("protos/es6/persistent.proto").unwrap();
-    tonic_build::compile_protos("protos/es6/projections.proto").unwrap();
-    tonic_build::compile_protos("protos/es6/streams.proto").unwrap();
-    tonic_build::compile_protos("protos/es6/users.proto").unwrap();
+    tonic_build::configure()
+        .build_server(false)
+        .out_dir("src/es6/grpc")
+        .compile(&files, &["protos/es6"]).unwrap();
+    // tonic_build::compile_protos("protos/es6/persistent.proto").unwrap();
+    // tonic_build::compile_protos("protos/es6/projections.proto").unwrap();
+    // tonic_build::compile_protos("protos/es6/streams.proto").unwrap();
+    // tonic_build::compile_protos("protos/es6/users.proto").unwrap();
 }
