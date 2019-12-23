@@ -1,3 +1,4 @@
+use byteorder::{ ByteOrder, BigEndian };
 use crate::es6::grpc::streams;
 use crate::es6::types::{ ResolvedEvent, RecordedEvent };
 use futures_3::stream::{ Stream, StreamExt };
@@ -19,7 +20,23 @@ fn server_event_to_client_event(
 fn raw_uuid_to_uuid(
     src: streams::Uuid,
 ) -> Uuid {
-    unimplemented!()
+    let value = src.value.expect("I expect Uuid value to be defined for now");
+
+    match value {
+        streams::uuid::Value::Structured(s) => {
+            let mut buf = vec![];
+
+            BigEndian::write_i64(&mut buf, s.most_significant_bits);
+            BigEndian::write_i64(&mut buf, s.least_significant_bits);
+
+            uuid::Uuid::from_slice(buf.as_slice())
+                .expect("We should have a valid UUID out of this")
+        },
+
+        streams::uuid::Value::String(s) => {
+            s.parse().expect("I expect to have a valid uuid from this message.")
+        },
+    }
 }
 
 /// A command that reads several events from a stream. It can read events
