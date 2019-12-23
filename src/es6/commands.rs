@@ -1,20 +1,46 @@
 use byteorder::{ ByteOrder, BigEndian };
 use crate::es6::grpc::streams;
-use crate::es6::types::{ ResolvedEvent, RecordedEvent };
+use crate::es6::types::{ ResolvedEvent, RecordedEvent, Position };
 use futures_3::stream::{ Stream, StreamExt };
 use uuid::Uuid;
 
 fn read_resp_to_resolved_event(
     resp: streams::ReadResp,
 ) -> ResolvedEvent {
-    let resp = resp.event.expect("Will see later if it's a possible situation");
-    unimplemented!()
+    let mut resp = resp
+        .event
+        .expect("Will see later if it's a possible situation");
+
+    ResolvedEvent {
+        event: resp.event.take().map(server_event_to_client_event),
+        link: resp.link.take().map(server_event_to_client_event),
+        position: None,
+    }
 }
 
 fn server_event_to_client_event(
-    src: streams::read_resp::read_event::RecordedEvent,
+    mut src: streams::read_resp::read_event::RecordedEvent,
 ) -> RecordedEvent {
-    unimplemented!()
+    let event_id = src
+        .id
+        .take()
+        .map(raw_uuid_to_uuid)
+        .expect("UUID property en RecordedEvent must be present");
+
+    let position = Position {
+        commit: src.commit_position,
+        prepare: src.prepare_position,
+    };
+
+    RecordedEvent {
+        event_stream_id: src.stream_name,
+        stream_revision:  src.stream_revision,
+        data: src.data,
+        metadata: src.metadata,
+        event_type: "<not known yet>".to_owned(),
+        position,
+        event_id,
+    }
 }
 
 fn raw_uuid_to_uuid(

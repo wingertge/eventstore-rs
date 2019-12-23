@@ -108,8 +108,11 @@ impl ConnectionBuilder {
         self,
         addr: SocketAddr
     ) -> Result<Connection, tonic::transport::Error> {
+        let connection_string = format!("https://{}", addr);
+        println!("Connection string: {}", connection_string);
+
         let streams_client = streams_client::StreamsClient::connect(
-            format!("https://{}", addr)).await?;
+            "https://localhost:2113/").await?;
 
         let connection = Connection {
             streams_client,
@@ -295,9 +298,9 @@ impl Connection {
     //     sender
     // }
 
-    fn start(&self) {
-        // self.sender.clone().send(Msg::Start).wait().unwrap();
-    }
+    // fn start(&self) {
+    //     // self.sender.clone().send(Msg::Start).wait().unwrap();
+    // }
 
     ///// Sends events to a given stream.
     //pub fn write_events<S>(&self, stream: S) -> commands::WriteEvents

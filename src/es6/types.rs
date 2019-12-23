@@ -202,28 +202,10 @@ impl ExpectedVersion {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
     /// Commit position of the record.
-    pub commit:  i64,
+    pub commit:  u64,
 
     /// Prepare position of the record.
-    pub prepare: i64,
-}
-
-impl Position {
-    /// Points to the begin of the transaction file.
-    pub fn start() -> Position {
-        Position {
-            commit: 0,
-            prepare: 0,
-        }
-    }
-
-    /// Points to the end of the transaction file.
-    pub fn end() -> Position {
-        Position {
-            commit: -1,
-            prepare: -1,
-        }
-    }
+    pub prepare: u64,
 }
 
 impl PartialOrd for Position {
@@ -504,11 +486,13 @@ pub struct RecordedEvent {
     /// Unique identifier representing this event.
     pub event_id: Uuid,
 
-    /// Revision of this event in the stream.
-    pub event_revision: i64,
+    /// Revision of the stream. Used to be event number.
+    pub stream_revision: u64,
 
     /// Type of this event.
     pub event_type: String,
+
+    pub position: Position,
 
     /// Payload of this event.
     pub data: Vec<u8>,
