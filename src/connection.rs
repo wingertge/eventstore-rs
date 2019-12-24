@@ -19,6 +19,20 @@ use crate::es6::commands;
 use crate::es6::grpc::streams::streams_client;
 use crate::es6::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
 
+struct NoVerification;
+
+impl rustls::ServerCertVerifier for NoVerification {
+    fn verify_server_cert(
+        &self,
+        roots: &rustls::RootCertStore,
+        presented_certs: &[rustls::Certificate],
+        dns_name: webpki::DNSNameRef,
+        ocsp_response: &[u8],
+    ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+        Ok(rustls::ServerCertVerified::assertion())
+    }
+}
+
 /// Represents a connection to a single node. `Client` maintains a full duplex
 ///
 /// connection to the EventStore server. An EventStore connection operates
@@ -111,8 +125,21 @@ impl ConnectionBuilder {
         // let connection_string = format!("https://{}", addr);
         // println!("Connection string: {}", connection_string);
 
-        let streams_client = streams_client::StreamsClient::connect(
-            "https://[::1]:2113/").await?;
+        let uri = "https://localhost:2113".parse::<http::uri::Uri>().unwrap();
+        let mut rustls_config = rustls::ClientConfig::new();
+
+        rustls_config.dangerous()
+            .set_certificate_verifier(std::sync::Arc::new(NoVerification));
+
+        let client_config = tonic::transport::ClientTlsConfig::new()
+            .rustls_client_config(rustls_config);
+
+        let channel = tonic::transport::Channel::builder(uri)
+            .tls_config(client_config)
+            .connect()
+            .await?;
+
+        let streams_client = streams_client::StreamsClient::new(channel);
 
         let connection = Connection {
             streams_client,
