@@ -108,11 +108,11 @@ impl ConnectionBuilder {
         self,
         addr: SocketAddr
     ) -> Result<Connection, tonic::transport::Error> {
-        let connection_string = format!("https://{}", addr);
-        println!("Connection string: {}", connection_string);
+        // let connection_string = format!("https://{}", addr);
+        // println!("Connection string: {}", connection_string);
 
         let streams_client = streams_client::StreamsClient::connect(
-            "https://localhost:2113/").await?;
+            "https://[::1]:2113/").await?;
 
         let connection = Connection {
             streams_client,
