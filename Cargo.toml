@@ -7,7 +7,7 @@ edition = "2018"
 # Uncomment if you want to update messages.rs code-gen.
 # We disabled codegen.rs because it requires having `protoc` installed on your machine
 # in order to build that library.
-# build = "codegen.rs"
+build = "codegen.rs"
 
 license = "MIT"
 description = "GetEventStore TCP client"
@@ -27,7 +27,10 @@ categories = ["database", "api-bindings"]
 [features]
 default = []
 es6 = [
-  "tonic"
+  "tonic",
+  "prost",
+  "prost-derive",
+  "prost-types"
 ]
 
 [dependencies]
@@ -45,9 +48,13 @@ reqwest = { version = "0.10", features = ["json"] }
 vec1 = "1.4"
 rand = "0.7"
 tonic = { version = "0.1", optional = true }
+prost = { version = "0.6", optional = true }
+prost-derive = { version = "0.6", optional = true }
+prost-types = { version = "0.6", optional = true }
 
 [build-dependencies]
 protoc-rust = "=2.8.1"
+tonic-build = "0.1"
 
 [[test]]
 name = "integration"

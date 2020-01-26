@@ -5,7 +5,25 @@ use futures::Stream;
 use futures::stream::{self, TryStreamExt};
 
 // use crate::internal::timespan::Timespan;
-use crate::types::{self, OperationError, Slice};
+use crate::types::{self, OperationError, Slice, ExpectedVersion};
+
+use streams::append_req::options::ExpectedStreamRevision;
+pub mod streams {
+    tonic::include_proto!("event_store.client.streams");
+}
+
+fn convert_expected_version(
+    version: ExpectedVersion,
+) -> ExpectedStreamRevision {
+    use streams::append_req::Empty;
+
+    match version {
+        ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
+        ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
+        ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
+        ExpectedVersion::Exact(version) => ExpectedStreamRevision::Revision(version as u64),
+    }
+}
 
 /// Command that sends events to a given stream.
 pub struct WriteEvents {
@@ -77,6 +95,16 @@ impl WriteEvents {
 
     /// Sends asynchronously the write command to the server.
     pub async fn execute(self) -> Result<types::WriteResult, OperationError> {
+        use streams::AppendReq;
+        let options = crate::es6::commands::streams::append_req::Options{
+            stream_name: self.stream,
+            expected_stream_revision: Some(convert_expected_version(self.version)),
+        };
+
+        let req = streams::AppendReq {
+            content: 1usize,
+        };
+
         unimplemented!()
     }
 }
