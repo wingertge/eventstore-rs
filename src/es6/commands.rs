@@ -1,0 +1,1112 @@
+//! Commands this client supports.
+use std::ops::Deref;
+
+use futures::Stream;
+use futures::stream::{self, TryStreamExt};
+
+// use crate::internal::timespan::Timespan;
+use crate::types::{self, OperationError, Slice};
+
+/// Command that sends events to a given stream.
+pub struct WriteEvents {
+    stream: String,
+    events: Vec<types::EventData>,
+    require_master: bool,
+    version: types::ExpectedVersion,
+    creds: Option<types::Credentials>,
+}
+
+impl WriteEvents {
+    pub(crate) fn new(stream: String) -> Self
+    {
+        WriteEvents {
+            stream: stream,
+            events: Vec::new(),
+            require_master: false,
+            version: types::ExpectedVersion::Any,
+            creds: None,
+        }
+    }
+
+    /// Sets events to write in the command. This function will replace
+    /// previously added events.
+    pub fn set_events(self, events: Vec<types::EventData>) -> Self {
+        WriteEvents { events, ..self }
+    }
+
+    /// Adds an event to the current list of events to send to the server.
+    pub fn push_event(mut self, event: types::EventData) -> Self {
+        self.events.push(event);
+
+        self
+    }
+
+    /// Extends the current set of events to send the the server with the
+    /// given iterator.
+    pub fn append_events<T>(mut self, events: T) -> Self
+    where
+        T: IntoIterator<Item = types::EventData>,
+    {
+        self.events.extend(events);
+
+        self
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        WriteEvents {
+            require_master,
+            ..self
+        }
+    }
+
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
+    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
+        WriteEvents { version, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        WriteEvents {
+            creds: Some(creds),
+            ..self
+        }
+    }
+
+    /// Sends asynchronously the write command to the server.
+    pub async fn execute(self) -> Result<types::WriteResult, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Command that reads an event from a given stream.
+pub struct ReadEvent {
+    stream: String,
+    event_number: i64,
+    resolve_link_tos: bool,
+    require_master: bool,
+    creds: Option<types::Credentials>,
+}
+
+impl ReadEvent {
+    pub(crate) fn new(stream: String, event_number: i64) -> Self
+    {
+        ReadEvent {
+            stream,
+            event_number,
+            resolve_link_tos: false,
+            require_master: false,
+            creds: None,
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        ReadEvent {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        ReadEvent {
+            require_master,
+            ..self
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        ReadEvent {
+            creds: Some(value),
+            ..self
+        }
+    }
+
+    /// Sends asynchronously the read command to the server.
+    pub async fn execute(
+        self,
+    ) -> Result<types::ReadEventStatus<types::ReadEventResult>, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Command that starts a transaction on a stream.
+pub struct TransactionStart {
+    stream: String,
+    version: types::ExpectedVersion,
+    require_master: bool,
+    creds_opt: Option<types::Credentials>,
+}
+
+impl TransactionStart {
+    pub(crate) fn new(stream: String) -> TransactionStart
+    {
+        TransactionStart {
+            stream,
+            require_master: false,
+            version: types::ExpectedVersion::Any,
+            creds_opt: None,
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        TransactionStart {
+            require_master,
+            ..self
+        }
+    }
+
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
+    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
+        TransactionStart { version, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        TransactionStart {
+            creds_opt: Some(value),
+            ..self
+        }
+    }
+
+    /// Sends asnychronously the start transaction command to the server.
+    pub async fn execute(self) -> Result<Transaction, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Represents a multi-requests transaction with the GetEventStore server.
+pub struct Transaction {
+    stream: String,
+    id: types::TransactionId,
+    version: types::ExpectedVersion,
+    require_master: bool,
+    creds: Option<types::Credentials>,
+}
+
+impl Transaction {
+    /// Returns the a `Transaction` id.
+    pub fn get_id(&self) -> types::TransactionId {
+        self.id
+    }
+
+    /// Like `write` but specific to a single event.
+    pub async fn write_single(&self, event: types::EventData) -> Result<(), OperationError> {
+        self.write(vec![event]).await
+    }
+
+    /// Asynchronously write to transaction in the GetEventStore server.
+    pub async fn write<I>(&self, events: I) -> Result<(), OperationError>
+    where
+        I: IntoIterator<Item = types::EventData>,
+    {
+        unimplemented!()
+    }
+
+    /// Asynchronously commit this transaction.
+    pub async fn commit(self) -> Result<types::WriteResult, OperationError> {
+        unimplemented!()
+    }
+
+    // On purpose, this function does nothing. GetEventStore doesn't have a rollback operation.
+    // This function is there mainly because of how transactions are perceived, meaning a
+    // transaction comes with a `commit` and a `rollback` functions.
+    pub fn rollback(self) {}
+}
+
+/// A command that reads several events from a stream. It can read events
+/// forward or backward.
+pub struct ReadStreamEvents {
+    stream: String,
+    max_count: i32,
+    start: i64,
+    require_master: bool,
+    resolve_link_tos: bool,
+    direction: types::ReadDirection,
+    creds: Option<types::Credentials>,
+}
+
+impl ReadStreamEvents {
+    pub(crate) fn new(stream: String) -> Self
+    {
+        ReadStreamEvents {
+            stream,
+            max_count: 500,
+            start: 0,
+            require_master: false,
+            resolve_link_tos: false,
+            direction: types::ReadDirection::Forward,
+            creds: None,
+        }
+    }
+
+    /// Asks the command to read forward (toward the end of the stream).
+    /// That's the default behavior.
+    pub fn forward(self) -> Self {
+        self.set_direction(types::ReadDirection::Forward)
+    }
+
+    /// Asks the command to read backward (toward the begining of the stream).
+    pub fn backward(self) -> Self {
+        self.set_direction(types::ReadDirection::Backward)
+    }
+
+    fn set_direction(self, direction: types::ReadDirection) -> Self {
+        ReadStreamEvents { direction, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        ReadStreamEvents {
+            creds: Some(value),
+            ..self
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn set_credentials(self, creds: Option<types::Credentials>) -> Self {
+        ReadStreamEvents { creds, ..self }
+    }
+
+    /// Max batch size.
+    pub fn max_count(self, max_count: i32) -> Self {
+        ReadStreamEvents { max_count, ..self }
+    }
+
+    /// Starts the read at the given event number. By default, it starts at
+    /// 0.
+    pub fn start_from(self, start: i64) -> Self {
+        ReadStreamEvents { start, ..self }
+    }
+
+    /// Starts the read from the beginning of the stream. It also set the read
+    /// direction to `Forward`.
+    pub fn start_from_beginning(self) -> Self {
+        let start = 0;
+        let direction = types::ReadDirection::Forward;
+
+        ReadStreamEvents {
+            start,
+            direction,
+            ..self
+        }
+    }
+
+    /// Starts the read from the end of the stream. It also set the read
+    /// direction to `Backward`.
+    pub fn start_from_end_of_stream(self) -> Self {
+        let start = -1;
+        let direction = types::ReadDirection::Backward;
+
+        ReadStreamEvents {
+            start,
+            direction,
+            ..self
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        ReadStreamEvents {
+            require_master,
+            ..self
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        ReadStreamEvents {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Sends asynchronously the read command to the server.
+    pub async fn execute(
+        self,
+    ) -> Result<types::ReadStreamStatus<types::StreamSlice>, OperationError> {
+        unimplemented!()
+    }
+
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc). Each
+    /// element corresponds to a page with a length <= `max_count`.
+    pub fn iterate_over_batch(
+        self,
+    ) -> impl Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> {
+        struct State {
+            stream: String,
+            pos: i64,
+        }
+
+        let init = State {
+            stream: self.stream,
+            pos: self.start,
+        };
+
+        let link_tos = types::LinkTos::from_bool(self.resolve_link_tos);
+        let max_count = self.max_count;
+        let require_master = self.require_master;
+        let direction = self.direction;
+
+        futures::stream::unfold(Some(init), move |state_opt| {
+            async move {
+                match state_opt {
+                    Some(mut state) => {
+                        let result: Result<types::ReadStreamStatus<types::StreamSlice>, _> =
+                            ReadStreamEvents::new((&*state.stream).to_string())
+                                .resolve_link_tos(link_tos)
+                                .start_from(state.pos)
+                                .max_count(max_count)
+                                .require_master(require_master)
+                                .set_direction(direction)
+                                .execute()
+                                .await;
+
+                        match result {
+                            Ok(status) => {
+                                match status {
+                                    types::ReadStreamStatus::Error(error) => {
+                                        match error {
+                                            types::ReadStreamError::Error(e) => Some((
+                                                Err(OperationError::ServerError(Some(e))),
+                                                None,
+                                            )),
+
+                                            types::ReadStreamError::AccessDenied(stream) => Some((
+                                                Err(OperationError::AccessDenied(stream)),
+                                                None,
+                                            )),
+
+                                            types::ReadStreamError::StreamDeleted(stream) => Some(
+                                                (Err(OperationError::StreamDeleted(stream)), None),
+                                            ),
+
+                                            // Other `types::ReadStreamError` aren't blocking errors
+                                            // so we consider the stream as an empty one.
+                                            _ => Some((Ok(vec![]), None)),
+                                        }
+                                    }
+
+                                    types::ReadStreamStatus::Success(slice) => match slice.events()
+                                    {
+                                        types::LocatedEvents::EndOfStream => None,
+
+                                        types::LocatedEvents::Events { events, next } => {
+                                            if let Some(next) = next {
+                                                state.pos = next;
+                                                return Some((Ok(events), Some(state)));
+                                            }
+
+                                            Some((Ok(events), None))
+                                        }
+                                    },
+                                }
+                            }
+
+                            Err(e) => Some((Err(e), None)),
+                        }
+                    }
+
+                    None => None,
+                }
+            }
+        })
+    }
+
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
+        self.iterate_over_batch()
+            .map_ok(lift_to_stream)
+            .try_flatten()
+    }
+}
+
+fn lift_to_stream(
+    evts: Vec<types::ResolvedEvent>,
+) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
+    use futures::stream;
+
+    let evts = evts
+        .into_iter()
+        .map(Ok::<types::ResolvedEvent, OperationError>);
+
+    stream::iter(evts)
+}
+
+/// Like `ReadStreamEvents` but specialized to system stream '$all'.
+pub struct ReadAllEvents {
+    max_count: i32,
+    start: types::Position,
+    require_master: bool,
+    resolve_link_tos: bool,
+    direction: types::ReadDirection,
+    creds: Option<types::Credentials>,
+}
+
+impl ReadAllEvents {
+    pub(crate) fn new() -> ReadAllEvents {
+        ReadAllEvents {
+            max_count: 500,
+            start: types::Position::start(),
+            require_master: false,
+            resolve_link_tos: false,
+            direction: types::ReadDirection::Forward,
+            creds: None,
+        }
+    }
+
+    /// Asks the command to read forward (toward the end of the stream).
+    /// That's the default behavior.
+    pub fn forward(self) -> Self {
+        self.set_direction(types::ReadDirection::Forward)
+    }
+
+    /// Asks the command to read backward (toward the begining of the stream).
+    pub fn backward(self) -> Self {
+        self.set_direction(types::ReadDirection::Backward)
+    }
+
+    fn set_direction(self, direction: types::ReadDirection) -> Self {
+        ReadAllEvents { direction, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        ReadAllEvents {
+            creds: Some(value),
+            ..self
+        }
+    }
+
+    /// Max batch size.
+    pub fn max_count(self, max_count: i32) -> Self {
+        ReadAllEvents { max_count, ..self }
+    }
+
+    /// Starts the read ot the given event number. By default, it starts at
+    /// `types::Position::start`.
+    pub fn start_from(self, start: types::Position) -> Self {
+        ReadAllEvents { start, ..self }
+    }
+
+    /// Starts the read from the beginning of the stream. It also set the read
+    /// direction to `Forward`.
+    pub fn start_from_beginning(self) -> Self {
+        let start = types::Position::start();
+        let direction = types::ReadDirection::Forward;
+
+        ReadAllEvents {
+            start,
+            direction,
+            ..self
+        }
+    }
+
+    /// Starts the read from the end of the stream. It also set the read
+    /// direction to `Backward`.
+    pub fn start_from_end_of_stream(self) -> Self {
+        let start = types::Position::end();
+        let direction = types::ReadDirection::Backward;
+
+        ReadAllEvents {
+            start,
+            direction,
+            ..self
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        ReadAllEvents {
+            require_master,
+            ..self
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        ReadAllEvents {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Sends asynchronously the read command to the server.
+    pub async fn execute(self) -> Result<types::ReadStreamStatus<types::AllSlice>, OperationError> {
+        unimplemented!()
+    }
+
+    /// Returns a `Stream` that consumes $all stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc). Each
+    /// element corresponds to a page with a length <= `max_count`.
+    pub fn iterate_over_batch(
+        self,
+    ) -> impl Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> {
+        struct State {
+            pos: types::Position,
+        }
+
+        let init = State {
+            pos: self.start,
+        };
+
+        let link_tos = types::LinkTos::from_bool(self.resolve_link_tos);
+        let max_count = self.max_count;
+        let require_master = self.require_master;
+        let direction = self.direction;
+
+        futures::stream::unfold(Some(init), move |state_opt| {
+            async move {
+                match state_opt {
+                    Some(mut state) => {
+                        let result: Result<types::ReadStreamStatus<types::AllSlice>, _> =
+                            ReadAllEvents::new()
+                                .resolve_link_tos(link_tos)
+                                .start_from(state.pos)
+                                .max_count(max_count)
+                                .require_master(require_master)
+                                .set_direction(direction)
+                                .execute()
+                                .await;
+
+                        match result {
+                            Ok(status) => {
+                                match status {
+                                    types::ReadStreamStatus::Error(error) => {
+                                        match error {
+                                            types::ReadStreamError::Error(e) => Some((
+                                                Err(OperationError::ServerError(Some(e))),
+                                                None,
+                                            )),
+
+                                            types::ReadStreamError::AccessDenied(stream) => Some((
+                                                Err(OperationError::AccessDenied(stream)),
+                                                None,
+                                            )),
+
+                                            types::ReadStreamError::StreamDeleted(stream) => Some(
+                                                (Err(OperationError::StreamDeleted(stream)), None),
+                                            ),
+
+                                            // Other `types::ReadStreamError` aren't blocking errors
+                                            // so we consider the stream as an empty one.
+                                            _ => Some((Ok(vec![]), None)),
+                                        }
+                                    }
+
+                                    types::ReadStreamStatus::Success(slice) => match slice.events()
+                                    {
+                                        types::LocatedEvents::EndOfStream => None,
+
+                                        types::LocatedEvents::Events { events, next } => {
+                                            if let Some(next) = next {
+                                                state.pos = next;
+                                                return Some((Ok(events), Some(state)));
+                                            }
+
+                                            Some((Ok(events), None))
+                                        }
+                                    },
+                                }
+                            }
+
+                            Err(e) => Some((Err(e), None)),
+                        }
+                    }
+
+                    None => None,
+                }
+            }
+        })
+    }
+
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
+        self.iterate_over_batch()
+            .map_ok(lift_to_stream)
+            .try_flatten()
+    }
+}
+
+/// Command that deletes a stream. More information on [Deleting stream and events].
+///
+/// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
+pub struct DeleteStream {
+    stream: String,
+    require_master: bool,
+    version: types::ExpectedVersion,
+    creds: Option<types::Credentials>,
+    hard_delete: bool,
+}
+
+impl DeleteStream {
+    pub(crate) fn new(stream: String) -> DeleteStream
+    {
+        DeleteStream {
+            stream,
+            require_master: false,
+            hard_delete: false,
+            version: types::ExpectedVersion::Any,
+            creds: None,
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        DeleteStream {
+            require_master,
+            ..self
+        }
+    }
+
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
+    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
+        DeleteStream { version, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        DeleteStream {
+            creds: Some(value),
+            ..self
+        }
+    }
+
+    /// Makes use of Truncate before. When a stream is deleted, its Truncate
+    /// before is set to the streams current last event number. When a soft
+    /// deleted stream is read, the read will return a StreamNotFound. After
+    /// deleting the stream, you are able to write to it again, continuing from
+    /// where it left off.
+    ///
+    /// That is the default behavior.
+    pub fn soft_delete(self) -> Self {
+        DeleteStream {
+            hard_delete: false,
+            ..self
+        }
+    }
+
+    /// A hard delete writes a tombstone event to the stream, permanently
+    /// deleting it. The stream cannot be recreated or written to again.
+    /// Tombstone events are written with the event type '$streamDeleted'. When
+    /// a hard deleted stream is read, the read will return a StreamDeleted.
+    pub fn hard_delete(self) -> Self {
+        DeleteStream {
+            hard_delete: true,
+            ..self
+        }
+    }
+
+    /// Sends asynchronously the delete command to the server.
+    pub async fn execute(self) -> Result<types::Position, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Represents a volatile subscription. For example, if a stream has 100 events
+/// in it when a subscriber connects, the subscriber can expect to see event
+/// number 101 onwards until the time the subscription is closed or dropped.
+///
+/// * Notes
+/// If the connection drops, the command will not try to resume the subscription.
+/// If you need this behavior, use a catchup subscription instead.
+pub struct SubscribeToStream {
+    stream_id: String,
+    resolve_link_tos: bool,
+    creds: Option<types::Credentials>,
+}
+
+impl SubscribeToStream {
+    pub(crate) fn new(stream_id: String) -> SubscribeToStream
+    {
+        SubscribeToStream {
+            stream_id,
+            resolve_link_tos: false,
+            creds: None,
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, value: types::Credentials) -> Self {
+        SubscribeToStream {
+            creds: Some(value),
+            ..self
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        SubscribeToStream {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Sends the volatile subscription request to the server asynchronously
+    /// even if the subscription is available right away.
+    pub fn execute(self) -> types::Subscription {
+        unimplemented!()
+    }
+}
+
+/// Subscribes to a given stream. This kind of subscription specifies a
+/// starting point (by default, the beginning of a stream). For a regular
+/// stream, that starting point will be an event number. For the system
+/// stream `$all`, it will be a position in the transaction file
+/// (see `subscribe_to_all_from`). This subscription will fetch every event
+/// until the end of the stream, then will dispatch subsequently written
+/// events.
+///
+/// For example, if a starting point of 50 is specified when a stream has
+/// 100 events in it, the subscriber can expect to see events 51 through
+/// 100, and then any events subsequenttly written events until such time
+/// as the subscription is dropped or closed.
+///
+/// * Notes
+/// Catchup subscription are resilient to connection drops.
+/// Basically, if the connection drops. The command will restart its
+/// catching up phase from the begining and then emit a new volatile
+/// subscription request.
+///
+/// All this process happens without the user has to do anything.
+pub struct RegularCatchupSubscribe {
+    stream_id: String,
+    resolve_link_tos: bool,
+    require_master: bool,
+    batch_size: i32,
+    start_pos: i64,
+    creds_opt: Option<types::Credentials>,
+}
+
+impl RegularCatchupSubscribe {
+    pub(crate) fn new(stream_id: String) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe {
+            stream_id,
+            resolve_link_tos: false,
+            require_master: false,
+            batch_size: 500,
+            start_pos: 0,
+            creds_opt: None,
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        RegularCatchupSubscribe {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        RegularCatchupSubscribe {
+            require_master,
+            ..self
+        }
+    }
+
+    /// For example, if a starting point of 50 is specified when a stream has
+    /// 100 events in it, the subscriber can expect to see events 51 through
+    /// 100, and then any events subsequenttly written events until such time
+    /// as the subscription is dropped or closed.
+    ///
+    /// By default, it will start from the event number 0.
+    pub fn start_position(self, start_pos: i64) -> Self {
+        RegularCatchupSubscribe { start_pos, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        RegularCatchupSubscribe {
+            creds_opt: Some(creds),
+            ..self
+        }
+    }
+
+    /// Preforms the catching up phase of the subscription asynchronously. When
+    /// it will reach the head of stream, the command will emit a volatile
+    /// subscription request.
+    pub fn execute(self) -> types::Subscription {
+        unimplemented!()
+    }
+}
+
+/// Like `RegularCatchupSubscribe` but specific to the system stream '$all'.
+pub struct AllCatchupSubscribe {
+    resolve_link_tos: bool,
+    require_master: bool,
+    batch_size: i32,
+    start_pos: types::Position,
+    creds_opt: Option<types::Credentials>,
+}
+
+impl AllCatchupSubscribe {
+    pub(crate) fn new() -> AllCatchupSubscribe {
+        AllCatchupSubscribe {
+            resolve_link_tos: false,
+            require_master: false,
+            batch_size: 500,
+            start_pos: types::Position::start(),
+            creds_opt: None,
+        }
+    }
+
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
+        AllCatchupSubscribe {
+            resolve_link_tos,
+            ..self
+        }
+    }
+
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
+    pub fn require_master(self, require_master: bool) -> Self {
+        AllCatchupSubscribe {
+            require_master,
+            ..self
+        }
+    }
+
+    /// Starting point in the transaction journal log. By default, it will start at
+    /// `types::Position::start`.
+    pub fn start_position(self, start_pos: types::Position) -> Self {
+        AllCatchupSubscribe { start_pos, ..self }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        AllCatchupSubscribe {
+            creds_opt: Some(creds),
+            ..self
+        }
+    }
+
+    /// Preforms the catching up phase of the subscription asynchronously. When
+    /// it will reach the head of stream, the command will emit a volatile
+    /// subscription request.
+    pub async fn execute(self) -> types::Subscription {
+        unimplemented!()
+    }
+}
+
+/// A command that creates a persistent subscription for a given group.
+pub struct CreatePersistentSubscription {
+    stream_id: String,
+    group_name: String,
+    sub_settings: types::PersistentSubscriptionSettings,
+    creds: Option<types::Credentials>,
+}
+
+impl CreatePersistentSubscription {
+    pub(crate) fn new(
+        stream_id: String,
+        group_name: String,
+    ) -> CreatePersistentSubscription {
+        CreatePersistentSubscription {
+            stream_id,
+            group_name,
+            creds: None,
+            sub_settings: types::PersistentSubscriptionSettings::default(),
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        CreatePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
+    }
+
+    /// Creates a persistent subscription based on the given
+    /// `types::PersistentSubscriptionSettings`.
+    pub fn settings(self, sub_settings: types::PersistentSubscriptionSettings) -> Self {
+        CreatePersistentSubscription {
+            sub_settings,
+            ..self
+        }
+    }
+
+    /// Sends the persistent subscription creation command asynchronously to
+    /// the server.
+    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Command that updates an already existing subscription's settings.
+pub struct UpdatePersistentSubscription {
+    stream_id: String,
+    group_name: String,
+    sub_settings: types::PersistentSubscriptionSettings,
+    creds: Option<types::Credentials>,
+}
+
+impl UpdatePersistentSubscription {
+    pub(crate) fn new(
+        stream_id: String,
+        group_name: String,
+    ) -> UpdatePersistentSubscription {
+        UpdatePersistentSubscription {
+            stream_id,
+            group_name,
+            creds: None,
+            sub_settings: types::PersistentSubscriptionSettings::default(),
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        UpdatePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
+    }
+
+    /// Updates a persistent subscription using the given
+    /// `types::PersistentSubscriptionSettings`.
+    pub fn settings(self, sub_settings: types::PersistentSubscriptionSettings) -> Self {
+        UpdatePersistentSubscription {
+            sub_settings,
+            ..self
+        }
+    }
+
+    /// Sends the persistent subscription update command asynchronously to
+    /// the server.
+    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// Command that  deletes a persistent subscription.
+pub struct DeletePersistentSubscription {
+    stream_id: String,
+    group_name: String,
+    creds: Option<types::Credentials>,
+}
+
+impl DeletePersistentSubscription {
+    pub(crate) fn new(
+        stream_id: String,
+        group_name: String,
+    ) -> DeletePersistentSubscription {
+        DeletePersistentSubscription {
+            stream_id,
+            group_name,
+            creds: None,
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        DeletePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
+    }
+
+    /// Sends the persistent subscription deletion command asynchronously to
+    /// the server.
+    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+        unimplemented!()
+    }
+}
+
+/// A subscription model where the server remembers the state of the
+/// consumption of a stream. This allows for many different modes of operations
+/// compared to a regular subscription where the client hols the subscription
+/// state.
+pub struct ConnectToPersistentSubscription {
+    stream_id: String,
+    group_name: String,
+    batch_size: u16,
+    creds: Option<types::Credentials>,
+}
+
+impl ConnectToPersistentSubscription {
+    pub(crate) fn new(
+        stream_id: String,
+        group_name: String,
+    ) -> ConnectToPersistentSubscription {
+        ConnectToPersistentSubscription {
+            stream_id,
+            group_name,
+            batch_size: 10,
+            creds: None,
+        }
+    }
+
+    /// Performs the command with the given credentials.
+    pub fn credentials(self, creds: types::Credentials) -> Self {
+        ConnectToPersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
+    }
+
+    /// The buffer size to use  for the persistent subscription.
+    pub fn batch_size(self, batch_size: u16) -> Self {
+        ConnectToPersistentSubscription { batch_size, ..self }
+    }
+
+    /// Sends the persistent subscription connection request to the server
+    /// asynchronously even if the subscription is available right away.
+    pub fn execute(self) -> types::Subscription {
+        unimplemented!()
+    }
+}
