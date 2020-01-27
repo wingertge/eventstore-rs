@@ -6,9 +6,11 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 
 use crate::discovery;
-use crate::es6::commands;
+use crate::es6::commands::{self, streams};
 use crate::internal::messaging::{Msg, OpMsg};
 use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, StreamMetadata};
+
+use tonic::transport::Channel;
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -22,7 +24,9 @@ use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, St
 /// or a single thread can make many asynchronous requests. To get the most
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
-pub struct Connection();
+pub struct Connection {
+    streams: streams::streams_client::StreamsClient<Channel>,
+}
 
 /// Helps constructing a connection to the server.
 pub struct ConnectionBuilder {
@@ -86,7 +90,9 @@ impl ConnectionBuilder {
 
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
-    pub async fn single_node_connection(self, addr: SocketAddr) -> Connection {
+    pub async fn single_node_connection(self, addr: SocketAddr)
+        -> Result<Connection, Box<dyn std::error::Error>>
+    {
         self.start_common_with_runtime(DiscoveryProcess::Static(addr))
             .await
     }
@@ -97,15 +103,16 @@ impl ConnectionBuilder {
     pub async fn cluster_nodes_through_gossip_connection(
         self,
         setts: GossipSeedClusterSettings,
-    ) -> Connection {
+    ) -> Result<Connection, Box<dyn std::error::Error>>
+    {
         self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts))
             .await
     }
 
-    async fn start_common_with_runtime(self, discovery: DiscoveryProcess) -> Connection {
-        let mut client = Connection::make(self.settings, discovery);
-
-        client
+    async fn start_common_with_runtime(self, discovery: DiscoveryProcess)
+        -> Result<Connection, Box<dyn std::error::Error>>
+    {
+        Connection::make(self.settings, discovery).await
     }
 }
 
@@ -124,35 +131,44 @@ impl Connection {
         }
     }
 
-    fn make(settings: Settings, discovery: DiscoveryProcess) -> Connection {
-        Self::initialize(&settings, discovery);
-
-        Connection()
+    async fn make(settings: Settings, discovery: DiscoveryProcess)
+        -> Result<Connection, Box<dyn std::error::Error>>
+    {
+        Self::initialize(&settings, discovery).await
     }
 
-    fn initialize(settings: &Settings, discovery: DiscoveryProcess) {
-        let (sender, _) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
-        let (_, run_discovery) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
+    async fn initialize(settings: &Settings, discovery: DiscoveryProcess)
+        -> Result<Connection, Box<dyn std::error::Error>>
+    {
+        // let (sender, _) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
+        // let (_, run_discovery) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
 
         match discovery {
             DiscoveryProcess::Static(addr) => {
-                let endpoint = types::Endpoint::from_addr(addr);
-                let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
+                let uri = format!("https://{}", addr).parse::<http::uri::Uri>()?;
+                let channel = Channel::builder(uri)
+                    .connect()
+                    .await?;
 
-                tokio::spawn(action);
+                let conn = Connection{
+                    streams: streams::streams_client::StreamsClient::new(channel),
+                };
+
+                Ok(conn)
             }
 
             DiscoveryProcess::ClusterThroughGossip(setts) => {
-                let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
+                // let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
 
-                tokio::spawn(action);
+                // tokio::spawn(action);
+                unimplemented!()
             }
-        };
+        }
     }
 
     /// Sends events to a given stream.
     pub fn write_events(&self, stream: String) -> commands::WriteEvents {
-        commands::WriteEvents::new( stream)
+        commands::WriteEvents::new(self.streams.clone(), stream)
     }
 
     /// Reads a single event from a given stream.

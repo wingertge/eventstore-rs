@@ -8,9 +8,14 @@ use futures::stream::{self, TryStreamExt};
 use crate::types::{self, OperationError, Slice, ExpectedVersion};
 
 use streams::append_req::options::ExpectedStreamRevision;
+use streams::streams_client::StreamsClient;
+
 pub mod streams {
     tonic::include_proto!("event_store.client.streams");
 }
+
+use tonic::Request;
+use tonic::transport::Channel;
 
 fn convert_expected_version(
     version: ExpectedVersion,
@@ -25,49 +30,31 @@ fn convert_expected_version(
     }
 }
 
+fn convert_event_data(
+    event: types::EventData,
+) -> streams::AppendReq {
+    unimplemented!()
+}
+
 /// Command that sends events to a given stream.
 pub struct WriteEvents {
+    client: StreamsClient<Channel>,
     stream: String,
-    events: Vec<types::EventData>,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
 }
 
 impl WriteEvents {
-    pub(crate) fn new(stream: String) -> Self
+    pub(crate) fn new(client: StreamsClient<Channel>, stream: String) -> Self
     {
         WriteEvents {
-            stream: stream,
-            events: Vec::new(),
+            client,
+            stream,
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds: None,
         }
-    }
-
-    /// Sets events to write in the command. This function will replace
-    /// previously added events.
-    pub fn set_events(self, events: Vec<types::EventData>) -> Self {
-        WriteEvents { events, ..self }
-    }
-
-    /// Adds an event to the current list of events to send to the server.
-    pub fn push_event(mut self, event: types::EventData) -> Self {
-        self.events.push(event);
-
-        self
-    }
-
-    /// Extends the current set of events to send the the server with the
-    /// given iterator.
-    pub fn append_events<T>(mut self, events: T) -> Self
-    where
-        T: IntoIterator<Item = types::EventData>,
-    {
-        self.events.extend(events);
-
-        self
     }
 
     /// Asks the server receiving the command to be the master of the cluster
@@ -94,18 +81,58 @@ impl WriteEvents {
     }
 
     /// Sends asynchronously the write command to the server.
-    pub async fn execute(self) -> Result<types::WriteResult, OperationError> {
+    pub async fn send<S>(mut self, stream: S)
+        -> Result<types::WriteResult, tonic::Status>
+    where
+        S: Stream<Item=types::EventData> + Send + Sync + 'static,
+    {
+        use stream::StreamExt;
         use streams::AppendReq;
-        let options = crate::es6::commands::streams::append_req::Options{
+        use streams::append_req::{self, Content};
+        use crate::es6::commands::streams::append_resp::{CurrentRevisionOption, PositionOption};
+
+        let header = Content::Options(append_req::Options{
             stream_name: self.stream,
             expected_stream_revision: Some(convert_expected_version(self.version)),
+        });
+        let header = AppendReq {
+            content: Some(header),
+        };
+        let header = stream::once(async move { header });
+        let events = stream.map(convert_event_data);
+        let payload = header.chain(events);
+
+        let resp = self.client
+            .append(Request::new(payload))
+            .await?
+            .into_inner();
+
+        let next_expected_version =
+            match resp.current_revision_option.unwrap() {
+                CurrentRevisionOption::CurrentRevision(rev) => rev as i64,
+                CurrentRevisionOption::NoStream(_) => 0i64,
+            };
+
+        let position =
+            match resp.position_option.unwrap() {
+                PositionOption::Position(pos) => {
+                    types::Position {
+                        commit: pos.commit_position as i64,
+                        prepare: pos.prepare_position as i64,
+                    }
+                }
+
+                PositionOption::Empty(_) => {
+                    types::Position::start()
+                }
+            };
+
+        let write_result = types::WriteResult {
+            next_expected_version,
+            position,
         };
 
-        let req = streams::AppendReq {
-            content: 1usize,
-        };
-
-        unimplemented!()
+        Ok(write_result)
     }
 }
 
