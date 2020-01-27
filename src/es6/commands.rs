@@ -5,7 +5,8 @@ use futures::Stream;
 use futures::stream::{self, TryStreamExt};
 
 // use crate::internal::timespan::Timespan;
-use crate::types::{self, OperationError, Slice, ExpectedVersion};
+use crate::types::{self, OperationError, Slice};
+use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult};
 
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -26,14 +27,63 @@ fn convert_expected_version(
         ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
         ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
         ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
-        ExpectedVersion::Exact(version) => ExpectedStreamRevision::Revision(version as u64),
+        ExpectedVersion::Exact(version) => ExpectedStreamRevision::Revision(version),
+    }
+}
+
+fn raw_uuid_to_uuid(
+    src: streams::Uuid,
+) -> uuid::Uuid {
+    use byteorder::{ByteOrder, BigEndian};
+
+    let value = src.value.expect("We expect Uuid value to be defined for now");
+
+    match value {
+        streams::uuid::Value::Structured(s) => {
+            let mut buf = vec![];
+
+            BigEndian::write_i64(&mut buf, s.most_significant_bits);
+            BigEndian::write_i64(&mut buf, s.least_significant_bits);
+
+            uuid::Uuid::from_slice(buf.as_slice())
+                .expect("We expect a valid UUID out of byte buffer")
+        }
+
+        streams::uuid::Value::String(s) => {
+            s.parse().expect("We expect a valid UUID out of this String")
+        }
     }
 }
 
 fn convert_event_data(
-    event: types::EventData,
+    mut event: EventData,
 ) -> streams::AppendReq {
-    unimplemented!()
+    use streams::append_req;
+
+    let id = event.id_opt.unwrap_or_else(|| uuid::Uuid::new_v4());
+    let id = streams::uuid::Value::String(id.to_string());
+    let id = streams::Uuid {
+        value: Some(id),
+    };
+    let is_json = event.payload.is_json();
+
+    event.metadata.insert("type".into(), event.event_type);
+    event.metadata.insert("is-json".into(), format!("{}", is_json));
+
+    let msg = append_req::ProposedMessage{
+        id: Some(id),
+        metadata: event.metadata,
+        // TODO - I need to probably set user metadata here instead of
+        // current metadata field in es6::types::EventData.
+        custom_metadata: vec![],
+        data: (&*event.payload.into_inner()).into(),
+    };
+
+    let content = append_req::Content::ProposedMessage(msg);
+
+    streams::AppendReq {
+        content: Some(content),
+    }
 }
 
 /// Command that sends events to a given stream.
@@ -41,7 +91,7 @@ pub struct WriteEvents {
     client: StreamsClient<Channel>,
     stream: String,
     require_master: bool,
-    version: types::ExpectedVersion,
+    version: ExpectedVersion,
     creds: Option<types::Credentials>,
 }
 
@@ -52,7 +102,7 @@ impl WriteEvents {
             client,
             stream,
             require_master: false,
-            version: types::ExpectedVersion::Any,
+            version: ExpectedVersion::Any,
             creds: None,
         }
     }
@@ -68,7 +118,7 @@ impl WriteEvents {
 
     /// Asks the server to check that the stream receiving the event is at
     /// the given expected version. Default: `types::ExpectedVersion::Any`.
-    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
+    pub fn expected_version(self, version: ExpectedVersion) -> Self {
         WriteEvents { version, ..self }
     }
 
@@ -82,9 +132,9 @@ impl WriteEvents {
 
     /// Sends asynchronously the write command to the server.
     pub async fn send<S>(mut self, stream: S)
-        -> Result<types::WriteResult, tonic::Status>
+        -> Result<WriteResult, tonic::Status>
     where
-        S: Stream<Item=types::EventData> + Send + Sync + 'static,
+        S: Stream<Item=EventData> + Send + Sync + 'static,
     {
         use stream::StreamExt;
         use streams::AppendReq;
@@ -109,25 +159,25 @@ impl WriteEvents {
 
         let next_expected_version =
             match resp.current_revision_option.unwrap() {
-                CurrentRevisionOption::CurrentRevision(rev) => rev as i64,
-                CurrentRevisionOption::NoStream(_) => 0i64,
+                CurrentRevisionOption::CurrentRevision(rev) => rev,
+                CurrentRevisionOption::NoStream(_) => 0,
             };
 
         let position =
             match resp.position_option.unwrap() {
                 PositionOption::Position(pos) => {
-                    types::Position {
-                        commit: pos.commit_position as i64,
-                        prepare: pos.prepare_position as i64,
+                    Position {
+                        commit: pos.commit_position,
+                        prepare: pos.prepare_position,
                     }
                 }
 
                 PositionOption::Empty(_) => {
-                    types::Position::start()
+                    Position::start()
                 }
             };
 
-        let write_result = types::WriteResult {
+        let write_result = WriteResult {
             next_expected_version,
             position,
         };
