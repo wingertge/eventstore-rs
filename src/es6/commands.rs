@@ -7,7 +7,7 @@ use futures::stream::{self, TryStreamExt};
 
 // use crate::internal::timespan::Timespan;
 use crate::types::{self, OperationError, Slice};
-use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult};
+use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision};
 
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -68,6 +68,9 @@ fn convert_event_data(
     };
     let is_json = event.payload.is_json();
     let mut metadata: HashMap<String, String> = HashMap::new();
+    let custom_metadata = event
+        .custom_metadata
+        .map_or_else(|| vec![], |p| (&*p.into_inner()).into());
 
     metadata.insert("type".into(), event.event_type);
     metadata.insert("is-json".into(), format!("{}", is_json));
@@ -75,7 +78,7 @@ fn convert_event_data(
     let msg = append_req::ProposedMessage{
         id: Some(id),
         metadata,
-        custom_metadata: event.custom_metadata.map_or_else(|| vec![], |p| (&*p.into_inner()).into()),
+        custom_metadata,
         data: (&*event.payload.into_inner()).into(),
     };
 
@@ -186,157 +189,12 @@ impl WriteEvents {
     }
 }
 
-/// Command that reads an event from a given stream.
-pub struct ReadEvent {
-    stream: String,
-    event_number: i64,
-    resolve_link_tos: bool,
-    require_master: bool,
-    creds: Option<types::Credentials>,
-}
-
-impl ReadEvent {
-    pub(crate) fn new(stream: String, event_number: i64) -> Self
-    {
-        ReadEvent {
-            stream,
-            event_number,
-            resolve_link_tos: false,
-            require_master: false,
-            creds: None,
-        }
-    }
-
-    /// When using projections, you can have links placed into another stream.
-    /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
-    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
-        let resolve_link_tos = tos.raw_resolve_lnk_tos();
-
-        ReadEvent {
-            resolve_link_tos,
-            ..self
-        }
-    }
-
-    /// Asks the server receiving the command to be the master of the cluster
-    /// in order to perform the write. Default: `false`.
-    pub fn require_master(self, require_master: bool) -> Self {
-        ReadEvent {
-            require_master,
-            ..self
-        }
-    }
-
-    /// Performs the command with the given credentials.
-    pub fn credentials(self, value: types::Credentials) -> Self {
-        ReadEvent {
-            creds: Some(value),
-            ..self
-        }
-    }
-
-    /// Sends asynchronously the read command to the server.
-    pub async fn execute(
-        self,
-    ) -> Result<types::ReadEventStatus<types::ReadEventResult>, OperationError> {
-        unimplemented!()
-    }
-}
-
-/// Command that starts a transaction on a stream.
-pub struct TransactionStart {
-    stream: String,
-    version: types::ExpectedVersion,
-    require_master: bool,
-    creds_opt: Option<types::Credentials>,
-}
-
-impl TransactionStart {
-    pub(crate) fn new(stream: String) -> TransactionStart
-    {
-        TransactionStart {
-            stream,
-            require_master: false,
-            version: types::ExpectedVersion::Any,
-            creds_opt: None,
-        }
-    }
-
-    /// Asks the server receiving the command to be the master of the cluster
-    /// in order to perform the write. Default: `false`.
-    pub fn require_master(self, require_master: bool) -> Self {
-        TransactionStart {
-            require_master,
-            ..self
-        }
-    }
-
-    /// Asks the server to check that the stream receiving the event is at
-    /// the given expected version. Default: `types::ExpectedVersion::Any`.
-    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
-        TransactionStart { version, ..self }
-    }
-
-    /// Performs the command with the given credentials.
-    pub fn credentials(self, value: types::Credentials) -> Self {
-        TransactionStart {
-            creds_opt: Some(value),
-            ..self
-        }
-    }
-
-    /// Sends asnychronously the start transaction command to the server.
-    pub async fn execute(self) -> Result<Transaction, OperationError> {
-        unimplemented!()
-    }
-}
-
-/// Represents a multi-requests transaction with the GetEventStore server.
-pub struct Transaction {
-    stream: String,
-    id: types::TransactionId,
-    version: types::ExpectedVersion,
-    require_master: bool,
-    creds: Option<types::Credentials>,
-}
-
-impl Transaction {
-    /// Returns the a `Transaction` id.
-    pub fn get_id(&self) -> types::TransactionId {
-        self.id
-    }
-
-    /// Like `write` but specific to a single event.
-    pub async fn write_single(&self, event: types::EventData) -> Result<(), OperationError> {
-        self.write(vec![event]).await
-    }
-
-    /// Asynchronously write to transaction in the GetEventStore server.
-    pub async fn write<I>(&self, events: I) -> Result<(), OperationError>
-    where
-        I: IntoIterator<Item = types::EventData>,
-    {
-        unimplemented!()
-    }
-
-    /// Asynchronously commit this transaction.
-    pub async fn commit(self) -> Result<types::WriteResult, OperationError> {
-        unimplemented!()
-    }
-
-    // On purpose, this function does nothing. GetEventStore doesn't have a rollback operation.
-    // This function is there mainly because of how transactions are perceived, meaning a
-    // transaction comes with a `commit` and a `rollback` functions.
-    pub fn rollback(self) {}
-}
-
 /// A command that reads several events from a stream. It can read events
 /// forward or backward.
 pub struct ReadStreamEvents {
     stream: String,
     max_count: i32,
-    start: i64,
+    revision: Revision,
     require_master: bool,
     resolve_link_tos: bool,
     direction: types::ReadDirection,
@@ -349,7 +207,7 @@ impl ReadStreamEvents {
         ReadStreamEvents {
             stream,
             max_count: 500,
-            start: 0,
+            revision: Revision::Start,
             require_master: false,
             resolve_link_tos: false,
             direction: types::ReadDirection::Forward,
@@ -392,19 +250,16 @@ impl ReadStreamEvents {
 
     /// Starts the read at the given event number. By default, it starts at
     /// 0.
-    pub fn start_from(self, start: i64) -> Self {
-        ReadStreamEvents { start, ..self }
+    pub fn start_from(self, start: u64) -> Self {
+        ReadStreamEvents { revision: Revision::Exact(start), ..self }
     }
 
     /// Starts the read from the beginning of the stream. It also set the read
     /// direction to `Forward`.
     pub fn start_from_beginning(self) -> Self {
-        let start = 0;
-        let direction = types::ReadDirection::Forward;
-
         ReadStreamEvents {
-            start,
-            direction,
+            revision: Revision::Start,
+            direction: types::ReadDirection::Forward,
             ..self
         }
     }
@@ -412,12 +267,9 @@ impl ReadStreamEvents {
     /// Starts the read from the end of the stream. It also set the read
     /// direction to `Backward`.
     pub fn start_from_end_of_stream(self) -> Self {
-        let start = -1;
-        let direction = types::ReadDirection::Backward;
-
         ReadStreamEvents {
-            start,
-            direction,
+            revision: Revision::End,
+            direction: types::ReadDirection::Backward,
             ..self
         }
     }
@@ -447,6 +299,9 @@ impl ReadStreamEvents {
     pub async fn execute(
         self,
     ) -> Result<types::ReadStreamStatus<types::StreamSlice>, OperationError> {
+        use streams::read_req::options::{StreamOption, StreamOptions};
+        use streams::read_red::options::stream_options::{RevisionOption};
+
         unimplemented!()
     }
 

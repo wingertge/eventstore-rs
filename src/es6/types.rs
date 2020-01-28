@@ -146,3 +146,10 @@ pub struct WriteResult {
     /// `Position` of the write.
     pub position: Position,
 }
+
+#[derive(Debug)]
+pub enum Revision {
+    Start,
+    End,
+    Exact(u64),
+}

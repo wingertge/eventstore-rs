@@ -171,16 +171,6 @@ impl Connection {
         commands::WriteEvents::new(self.streams.clone(), stream)
     }
 
-    /// Reads a single event from a given stream.
-    pub fn read_event(&self, stream: String, event_number: i64) -> commands::ReadEvent {
-        commands::ReadEvent::new(stream, event_number)
-    }
-
-    /// Starts a transaction on a given stream.
-    pub fn start_transaction(&self, stream: String) -> commands::TransactionStart {
-        commands::TransactionStart::new( stream)
-    }
-
     /// Reads events from a given stream. The reading can be done forward and
     /// backward.
     pub fn read_stream(&self, stream: String) -> commands::ReadStreamEvents {
