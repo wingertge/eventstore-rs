@@ -75,7 +75,7 @@ fn convert_event_data(
     let msg = append_req::ProposedMessage{
         id: Some(id),
         metadata,
-        custom_metadata: event.custom_metadata.into_inner(),
+        custom_metadata: event.custom_metadata.map_or_else(|| vec![], |p| (&*p.into_inner()).into()),
         data: (&*event.payload.into_inner()).into(),
     };
 
