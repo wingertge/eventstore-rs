@@ -1,5 +1,6 @@
 //! Commands this client supports.
 use std::ops::Deref;
+use std::collections::HashMap;
 
 use futures::Stream;
 use futures::stream::{self, TryStreamExt};
@@ -66,16 +67,15 @@ fn convert_event_data(
         value: Some(id),
     };
     let is_json = event.payload.is_json();
+    let mut metadata: HashMap<String, String> = HashMap::new();
 
-    event.metadata.insert("type".into(), event.event_type);
-    event.metadata.insert("is-json".into(), format!("{}", is_json));
+    metadata.insert("type".into(), event.event_type);
+    metadata.insert("is-json".into(), format!("{}", is_json));
 
     let msg = append_req::ProposedMessage{
         id: Some(id),
-        metadata: event.metadata,
-        // TODO - I need to probably set user metadata here instead of
-        // current metadata field in es6::types::EventData.
-        custom_metadata: vec![],
+        metadata,
+        custom_metadata: event.custom_metadata.into_inner(),
         data: (&*event.payload.into_inner()).into(),
     };
 

@@ -37,7 +37,7 @@ pub struct EventData {
     pub(crate) event_type: String,
     pub(crate) payload: types::Payload,
     pub(crate) id_opt: Option<Uuid>,
-    pub(crate) metadata: HashMap<String, String>,
+    pub(crate) custom_metadata: Option<types::Payload>,
 }
 
 impl EventData {
@@ -54,7 +54,7 @@ impl EventData {
             event_type,
             payload,
             id_opt: None,
-            metadata: HashMap::new(),
+            custom_metadata: None,
         })
     }
 
@@ -64,7 +64,7 @@ impl EventData {
             event_type,
             payload: types::Payload::Binary(payload),
             id_opt: None,
-            metadata: HashMap::new(),
+            custom_metadata: None,
         }
     }
 
@@ -77,10 +77,26 @@ impl EventData {
         }
     }
 
-    /// Assignes metadata to this event.
-    pub fn metadata(self, metadata: HashMap<String, String>) -> Self {
+    /// Assignes a JSON metadata to this event.
+    pub fn metadata_as_json<P>(self, payload: P) -> EventData
+        where
+            P: Serialize,
+    {
+        let bytes = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let json_bin = Some(types::Payload::Json(bytes));
+
         EventData {
-            metadata,
+            custom_metadata: json_bin,
+            ..self
+        }
+    }
+
+    /// Assignes a raw binary metadata to this event.
+    pub fn metadata_as_binary(self, payload: Bytes) -> EventData {
+        let content_bin = Some(types::Payload::Binary(payload));
+
+        EventData {
+            custom_metadata: content_bin,
             ..self
         }
     }
