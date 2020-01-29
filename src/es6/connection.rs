@@ -174,7 +174,7 @@ impl Connection {
     /// Reads events from a given stream. The reading can be done forward and
     /// backward.
     pub fn read_stream(&self, stream: String) -> commands::ReadStreamEvents {
-        commands::ReadStreamEvents::new(stream)
+        commands::ReadStreamEvents::new(self.streams.clone(), stream)
     }
 
     /// Reads events for the system stream `$all`. The reading can be done

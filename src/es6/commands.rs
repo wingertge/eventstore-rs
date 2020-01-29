@@ -89,6 +89,18 @@ fn convert_event_data(
     }
 }
 
+fn convert_proto_recorded_event(
+    event: streams::read_resp::read_event::RecordedEvent,
+) -> types::RecordedEvent {
+    unimplemented!()
+}
+
+fn convert_proto_read_event(
+    event: streams::read_resp::ReadEvent,
+) -> types::ResolvedEvent {
+    unimplemented!()
+}
+
 /// Command that sends events to a given stream.
 pub struct WriteEvents {
     client: StreamsClient<Channel>,
@@ -192,6 +204,7 @@ impl WriteEvents {
 /// A command that reads several events from a stream. It can read events
 /// forward or backward.
 pub struct ReadStreamEvents {
+    client: StreamsClient<Channel>,
     stream: String,
     max_count: i32,
     revision: Revision,
@@ -202,9 +215,10 @@ pub struct ReadStreamEvents {
 }
 
 impl ReadStreamEvents {
-    pub(crate) fn new(stream: String) -> Self
+    pub(crate) fn new(client: StreamsClient<Channel>, stream: String) -> Self
     {
         ReadStreamEvents {
+            client,
             stream,
             max_count: 500,
             revision: Revision::Start,
@@ -297,9 +311,10 @@ impl ReadStreamEvents {
 
     /// Sends asynchronously the read command to the server.
     pub async fn execute(
-        self,
+        mut self,
         count: u64,
-    ) -> Result<types::ReadStreamStatus<types::StreamSlice>, OperationError> {
+    ) -> Result<Box<dyn Stream<Item=Result<types::ResolvedEvent, tonic::Status>>>, tonic::Status> {
+        use futures::stream::TryStreamExt;
         use streams::read_req::{Empty, Options};
         use streams::read_req::options::{self, StreamOption, StreamOptions};
         use streams::read_req::options::stream_options::{RevisionOption};
@@ -339,7 +354,14 @@ impl ReadStreamEvents {
 
         let req = Request::new(req);
 
-        unimplemented!()
+        let stream = self.client.read(req)
+            .await?
+            .into_inner();
+
+        // TODO - I'm not so sure about that unwrap here.
+        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+
+        Ok(Box::new(stream))
     }
 }
 
