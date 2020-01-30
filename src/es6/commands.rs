@@ -671,9 +671,10 @@ impl DeleteStream {
     }
 
     /// Sends asynchronously the delete command to the server.
-    pub async fn execute(self) -> Result<Position, tonic::Status> {
+    pub async fn execute(mut self) -> Result<Option<Position>, tonic::Status> {
         use streams::delete_req::{Options, Empty};
         use streams::delete_req::options::ExpectedStreamRevision;
+        use streams::delete_resp::PositionOption;
 
         let expected_stream_revision = match self.version {
             ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
@@ -689,7 +690,30 @@ impl DeleteStream {
             expected_stream_revision,
         };
 
-        unimplemented!()
+        let req = Request::new(streams::DeleteReq {
+            options: Some(options),
+        });
+
+        let result = self.client.delete(req)
+            .await?
+            .into_inner();
+
+        if let Some(opts) = result.position_option {
+            match opts {
+                PositionOption::Position(pos) => {
+                    let pos = Position {
+                        commit: pos.commit_position,
+                        prepare: pos.prepare_position,
+                    };
+
+                    Ok(Some(pos))
+                }
+
+                PositionOption::Empty(_) => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
     }
 }
 
