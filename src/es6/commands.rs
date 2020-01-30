@@ -7,7 +7,7 @@ use futures::stream::{self, TryStreamExt};
 
 // use crate::internal::timespan::Timespan;
 use crate::types::{self, OperationError, Slice};
-use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision};
+use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision, ResolvedEvent, RecordedEvent};
 
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -90,15 +90,66 @@ fn convert_event_data(
 }
 
 fn convert_proto_recorded_event(
-    event: streams::read_resp::read_event::RecordedEvent,
-) -> types::RecordedEvent {
-    unimplemented!()
+    mut event: streams::read_resp::read_event::RecordedEvent,
+) -> RecordedEvent {
+    let id = event
+        .id
+        .map(raw_uuid_to_uuid)
+        .expect("Unable to parse Uuid [convert_proto_recorded_event]");
+
+    let position = Position {
+        commit: event.commit_position,
+        prepare: event.prepare_position,
+    };
+
+    let event_type =
+        if let Some(tpe) = event.metadata.remove(&"type".to_owned()) {
+            tpe
+        } else {
+            "<no-event-type-provided>".to_owned()
+        };
+
+    let is_json =
+        if let Some(is_json) = event.metadata.remove(&"is-json".to_owned()) {
+            match is_json.as_str() {
+                "true" => true,
+                "false" => false,
+                unknown => panic!("Unknown [{}] 'is_json' metadata value"),
+            }
+        } else {
+            false
+        };
+
+    RecordedEvent {
+        id,
+        stream_id: event.stream_name,
+        revision: event.stream_revision,
+        position,
+        event_type,
+        is_json,
+        metadata: event.custom_metadata.into(),
+        data: event.data.into(),
+    }
 }
 
 fn convert_proto_read_event(
     event: streams::read_resp::ReadEvent,
-) -> types::ResolvedEvent {
-    unimplemented!()
+) -> ResolvedEvent {
+    let commit_position =
+        if let Some(pos_alt) = event.position {
+            match pos_alt {
+                streams::read_resp::read_event::Position::CommitPosition(pos) => Some(pos),
+                streams::read_resp::read_event::Position::NoPosition(_) => None,
+            }
+        } else {
+            None
+        };
+
+    ResolvedEvent {
+        event: event.event.map(convert_proto_recorded_event),
+        link: event.link.map(convert_proto_recorded_event),
+        commit_position,
+    }
 }
 
 /// Command that sends events to a given stream.
@@ -313,7 +364,7 @@ impl ReadStreamEvents {
     pub async fn execute(
         mut self,
         count: u64,
-    ) -> Result<Box<dyn Stream<Item=Result<types::ResolvedEvent, tonic::Status>>>, tonic::Status> {
+    ) -> Result<Box<dyn Stream<Item=Result<ResolvedEvent, tonic::Status>>>, tonic::Status> {
         use futures::stream::TryStreamExt;
         use streams::read_req::{Empty, Options};
         use streams::read_req::options::{self, StreamOption, StreamOptions};

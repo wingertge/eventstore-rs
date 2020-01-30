@@ -153,3 +153,44 @@ pub enum Revision {
     End,
     Exact(u64),
 }
+
+/// A structure representing a single event or an resolved link event.
+#[derive(Debug)]
+pub struct ResolvedEvent {
+    /// The event, or the resolved link event if this `ResolvedEvent` is a link
+    /// event.
+    pub event: Option<RecordedEvent>,
+
+    /// The link event if this `ResolvedEvent` is a link event.
+    pub link: Option<RecordedEvent>,
+
+    pub commit_position: Option<u64>,
+}
+
+/// Represents a previously written event.
+#[derive(Debug)]
+pub struct RecordedEvent {
+    /// The event stream that events belongs to.
+    pub stream_id: String,
+
+    /// Unique identifier representing this event.
+    pub id: Uuid,
+
+    /// Number of this event in the stream.
+    pub revision: u64,
+
+    /// Type of this event.
+    pub event_type: String,
+
+    /// Payload of this event.
+    pub data: Bytes,
+
+    /// Representing the metadata associated with this event.
+    pub metadata: Bytes,
+
+    /// Indicates wheter the content is internally marked as JSON.
+    pub is_json: bool,
+
+    /// An event position in the $all stream.
+    pub position: Position,
+}
