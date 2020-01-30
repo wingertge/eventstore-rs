@@ -601,21 +601,23 @@ impl ReadAllEvents {
 ///
 /// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
 pub struct DeleteStream {
+    client: StreamsClient<Channel>,
     stream: String,
     require_master: bool,
-    version: types::ExpectedVersion,
+    version: ExpectedVersion,
     creds: Option<types::Credentials>,
     hard_delete: bool,
 }
 
 impl DeleteStream {
-    pub(crate) fn new(stream: String) -> DeleteStream
+    pub(crate) fn new(client: StreamsClient<Channel>, stream: String) -> DeleteStream
     {
         DeleteStream {
+            client,
             stream,
             require_master: false,
             hard_delete: false,
-            version: types::ExpectedVersion::Any,
+            version: ExpectedVersion::Any,
             creds: None,
         }
     }
@@ -631,7 +633,7 @@ impl DeleteStream {
 
     /// Asks the server to check that the stream receiving the event is at
     /// the given expected version. Default: `types::ExpectedVersion::Any`.
-    pub fn expected_version(self, version: types::ExpectedVersion) -> Self {
+    pub fn expected_version(self, version: ExpectedVersion) -> Self {
         DeleteStream { version, ..self }
     }
 
@@ -669,7 +671,24 @@ impl DeleteStream {
     }
 
     /// Sends asynchronously the delete command to the server.
-    pub async fn execute(self) -> Result<types::Position, OperationError> {
+    pub async fn execute(self) -> Result<Position, tonic::Status> {
+        use streams::delete_req::{Options, Empty};
+        use streams::delete_req::options::ExpectedStreamRevision;
+
+        let expected_stream_revision = match self.version {
+            ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
+            ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
+            ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
+            ExpectedVersion::Exact(rev) => ExpectedStreamRevision::Revision(rev),
+        };
+
+        let expected_stream_revision = Some(expected_stream_revision);
+
+        let options = Options {
+            stream_name: self.stream,
+            expected_stream_revision,
+        };
+
         unimplemented!()
     }
 }

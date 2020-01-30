@@ -189,7 +189,7 @@ impl Connection {
     ///
     /// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
     pub fn delete_stream(&self, stream: String) -> commands::DeleteStream {
-        commands::DeleteStream::new(stream)
+        commands::DeleteStream::new(self.streams.clone(), stream)
     }
 
     /// Subscribes to a given stream. You will get notified of each new events
