@@ -148,10 +148,10 @@ pub struct WriteResult {
 }
 
 #[derive(Debug)]
-pub enum Revision {
+pub enum Revision<A> {
     Start,
     End,
-    Exact(u64),
+    Exact(A),
 }
 
 /// A structure representing a single event or an resolved link event.

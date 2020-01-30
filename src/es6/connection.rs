@@ -180,7 +180,7 @@ impl Connection {
     /// Reads events for the system stream `$all`. The reading can be done
     /// forward and backward.
     pub fn read_all(&self) -> commands::ReadAllEvents {
-        commands::ReadAllEvents::new()
+        commands::ReadAllEvents::new(self.streams.clone())
     }
 
     /// Deletes a given stream. By default, the server performs a soft delete,

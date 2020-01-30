@@ -258,7 +258,7 @@ pub struct ReadStreamEvents {
     client: StreamsClient<Channel>,
     stream: String,
     max_count: i32,
-    revision: Revision,
+    revision: Revision<u64>,
     require_master: bool,
     resolve_link_tos: bool,
     direction: types::ReadDirection,
@@ -430,8 +430,9 @@ fn lift_to_stream(
 
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
 pub struct ReadAllEvents {
+    client: StreamsClient<Channel>,
     max_count: i32,
-    start: types::Position,
+    revision: Revision<Position>,
     require_master: bool,
     resolve_link_tos: bool,
     direction: types::ReadDirection,
@@ -439,10 +440,11 @@ pub struct ReadAllEvents {
 }
 
 impl ReadAllEvents {
-    pub(crate) fn new() -> ReadAllEvents {
+    pub(crate) fn new(client: StreamsClient<Channel>) -> ReadAllEvents {
         ReadAllEvents {
+            client,
             max_count: 500,
-            start: types::Position::start(),
+            revision: Revision::Start,
             require_master: false,
             resolve_link_tos: false,
             direction: types::ReadDirection::Forward,
@@ -480,18 +482,19 @@ impl ReadAllEvents {
 
     /// Starts the read ot the given event number. By default, it starts at
     /// `types::Position::start`.
-    pub fn start_from(self, start: types::Position) -> Self {
-        ReadAllEvents { start, ..self }
+    pub fn start_from(self, start: Position) -> Self {
+        let revision = Revision::Exact(start);
+        ReadAllEvents { revision, ..self }
     }
 
     /// Starts the read from the beginning of the stream. It also set the read
     /// direction to `Forward`.
     pub fn start_from_beginning(self) -> Self {
-        let start = types::Position::start();
+        let revision = Revision::Start;
         let direction = types::ReadDirection::Forward;
 
         ReadAllEvents {
-            start,
+            revision,
             direction,
             ..self
         }
@@ -500,11 +503,11 @@ impl ReadAllEvents {
     /// Starts the read from the end of the stream. It also set the read
     /// direction to `Backward`.
     pub fn start_from_end_of_stream(self) -> Self {
-        let start = types::Position::end();
+        let revision = Revision::End;
         let direction = types::ReadDirection::Backward;
 
         ReadAllEvents {
-            start,
+            revision,
             direction,
             ..self
         }
@@ -532,106 +535,65 @@ impl ReadAllEvents {
     }
 
     /// Sends asynchronously the read command to the server.
-    pub async fn execute(self) -> Result<types::ReadStreamStatus<types::AllSlice>, OperationError> {
-        unimplemented!()
-    }
+    pub async fn execute(
+        mut self,
+        count: u64
+    ) -> Result<Box<dyn Stream<Item=Result<ResolvedEvent, tonic::Status>>>, tonic::Status>  {
+        use futures::stream::TryStreamExt;
+        use streams::read_req::{Empty, Options};
+        use streams::read_req::options::{self, StreamOption, AllOptions};
+        use streams::read_req::options::all_options::AllOption;
 
-    /// Returns a `Stream` that consumes $all stream entirely. For example, if
-    /// the direction is `Forward`, it ends when the last stream event is reached.
-    /// However, if the direction is `Backward`, the iterator ends when the
-    /// first event is reached. All the configuration is pass to the iterator
-    /// (link resolution, require master, starting point, batch size, …etc). Each
-    /// element corresponds to a page with a length <= `max_count`.
-    pub fn iterate_over_batch(
-        self,
-    ) -> impl Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> {
-        struct State {
-            pos: types::Position,
-        }
-
-        let init = State {
-            pos: self.start,
+        let read_direction = match self.direction {
+            types::ReadDirection::Forward => 0,
+            types::ReadDirection::Backward => 1,
         };
 
-        let link_tos = types::LinkTos::from_bool(self.resolve_link_tos);
-        let max_count = self.max_count;
-        let require_master = self.require_master;
-        let direction = self.direction;
+        let all_option = match self.revision {
+            Revision::Exact(pos) => {
+                let pos = options::Position {
+                    commit_position: pos.commit,
+                    prepare_position: pos.prepare,
+                };
 
-        futures::stream::unfold(Some(init), move |state_opt| {
-            async move {
-                match state_opt {
-                    Some(mut state) => {
-                        let result: Result<types::ReadStreamStatus<types::AllSlice>, _> =
-                            ReadAllEvents::new()
-                                .resolve_link_tos(link_tos)
-                                .start_from(state.pos)
-                                .max_count(max_count)
-                                .require_master(require_master)
-                                .set_direction(direction)
-                                .execute()
-                                .await;
-
-                        match result {
-                            Ok(status) => {
-                                match status {
-                                    types::ReadStreamStatus::Error(error) => {
-                                        match error {
-                                            types::ReadStreamError::Error(e) => Some((
-                                                Err(OperationError::ServerError(Some(e))),
-                                                None,
-                                            )),
-
-                                            types::ReadStreamError::AccessDenied(stream) => Some((
-                                                Err(OperationError::AccessDenied(stream)),
-                                                None,
-                                            )),
-
-                                            types::ReadStreamError::StreamDeleted(stream) => Some(
-                                                (Err(OperationError::StreamDeleted(stream)), None),
-                                            ),
-
-                                            // Other `types::ReadStreamError` aren't blocking errors
-                                            // so we consider the stream as an empty one.
-                                            _ => Some((Ok(vec![]), None)),
-                                        }
-                                    }
-
-                                    types::ReadStreamStatus::Success(slice) => match slice.events()
-                                    {
-                                        types::LocatedEvents::EndOfStream => None,
-
-                                        types::LocatedEvents::Events { events, next } => {
-                                            if let Some(next) = next {
-                                                state.pos = next;
-                                                return Some((Ok(events), Some(state)));
-                                            }
-
-                                            Some((Ok(events), None))
-                                        }
-                                    },
-                                }
-                            }
-
-                            Err(e) => Some((Err(e), None)),
-                        }
-                    }
-
-                    None => None,
-                }
+                AllOption::Position(pos)
             }
-        })
-    }
 
-    /// Returns a `Stream` that consumes a stream entirely. For example, if
-    /// the direction is `Forward`, it ends when the last stream event is reached.
-    /// However, if the direction is `Backward`, the iterator ends when the
-    /// first event is reached. All the configuration is pass to the iterator
-    /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
-        self.iterate_over_batch()
-            .map_ok(lift_to_stream)
-            .try_flatten()
+            Revision::Start => AllOption::Start(Empty{}),
+            Revision::End => AllOption::End(Empty{}),
+        };
+
+        let stream_options = AllOptions {
+            all_option: Some(all_option),
+        };
+
+        let uuid_option = options::UuidOption {
+            content: Some(options::uuid_option::Content::String(Empty{}))
+        };
+
+        let options = Options {
+            stream_option: Some(StreamOption::All(stream_options)),
+            resolve_links: self.resolve_link_tos,
+            filter_option: Some(options::FilterOption::NoFilter(Empty{})),
+            count_option: Some(options::CountOption::Count(count)),
+            uuid_option: Some(uuid_option),
+            read_direction,
+        };
+
+        let req = streams::ReadReq {
+            options: Some(options),
+        };
+
+        let req = Request::new(req);
+
+        let stream = self.client.read(req)
+            .await?
+            .into_inner();
+
+        // TODO - I'm not so sure about that unwrap here.
+        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+
+        Ok(Box::new(stream))
     }
 }
 
