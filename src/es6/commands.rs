@@ -5,15 +5,19 @@ use std::collections::HashMap;
 use futures::Stream;
 use futures::stream::{self, TryStreamExt};
 
-// use crate::internal::timespan::Timespan;
 use crate::types::{self, OperationError, Slice};
 use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision, ResolvedEvent, RecordedEvent};
 
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
+use persistent::persistent_subscriptions_client::PersistentSubscriptionsClient;
 
 pub mod streams {
     tonic::include_proto!("event_store.client.streams");
+}
+
+pub mod persistent {
+    tonic::include_proto!("event_store.client.persistent_subscriptions");
 }
 
 use tonic::Request;
@@ -129,6 +133,32 @@ fn convert_proto_recorded_event(
         is_json,
         metadata: event.custom_metadata.into(),
         data: event.data.into(),
+    }
+}
+
+fn convert_settings(
+    settings: types::PersistentSubscriptionSettings,
+) -> persistent::create_req::Settings {
+    let named_consumer_strategy = match settings.strategy {
+        types::SystemConsumerStrategy::DispatchToSingle => 0,
+        types::SystemConsumerStrategy::RoundRobin => 1,
+        types::SystemConsumerStrategy::Pinned => 2,
+    };
+
+    persistent::create_req::Settings {
+        resolve_links: settings.resolve_link_tos,
+        revision: settings.revision as u64,
+        extra_statistics: settings.extra_stats,
+        message_timeout: settings.msg_timeout.as_millis() as i64,
+        max_retry_count: settings.max_retry_count as i32,
+        checkpoint_after: settings.checkpoint_after.as_millis() as i64,
+        min_checkpoint_count: settings.min_checkpoint_count as i32,
+        max_checkpoint_count: settings.max_checkpoint_count as i32,
+        max_subscriber_count: settings.max_subs_count as i32,
+        live_buffer_size: settings.live_buffer_size as i32,
+        read_batch_size: settings.read_batch_size as i32,
+        history_batch_size: settings.history_batch_size as i32,
+        named_consumer_strategy,
     }
 }
 
@@ -1060,6 +1090,8 @@ impl CreatePersistentSubscription {
     /// Sends the persistent subscription creation command asynchronously to
     /// the server.
     pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+        use persistent::CreateReq;
+        use persistent::create_req;
         unimplemented!()
     }
 }
