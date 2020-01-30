@@ -717,56 +717,6 @@ impl DeleteStream {
     }
 }
 
-/// Represents a volatile subscription. For example, if a stream has 100 events
-/// in it when a subscriber connects, the subscriber can expect to see event
-/// number 101 onwards until the time the subscription is closed or dropped.
-///
-/// * Notes
-/// If the connection drops, the command will not try to resume the subscription.
-/// If you need this behavior, use a catchup subscription instead.
-pub struct SubscribeToStream {
-    stream_id: String,
-    resolve_link_tos: bool,
-    creds: Option<types::Credentials>,
-}
-
-impl SubscribeToStream {
-    pub(crate) fn new(stream_id: String) -> SubscribeToStream
-    {
-        SubscribeToStream {
-            stream_id,
-            resolve_link_tos: false,
-            creds: None,
-        }
-    }
-
-    /// Performs the command with the given credentials.
-    pub fn credentials(self, value: types::Credentials) -> Self {
-        SubscribeToStream {
-            creds: Some(value),
-            ..self
-        }
-    }
-
-    /// When using projections, you can have links placed into another stream.
-    /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
-    pub fn resolve_link_tos(self, tos: types::LinkTos) -> Self {
-        let resolve_link_tos = tos.raw_resolve_lnk_tos();
-
-        SubscribeToStream {
-            resolve_link_tos,
-            ..self
-        }
-    }
-
-    /// Sends the volatile subscription request to the server asynchronously
-    /// even if the subscription is available right away.
-    pub fn execute(self) -> types::Subscription {
-        unimplemented!()
-    }
-}
-
 /// Subscribes to a given stream. This kind of subscription specifies a
 /// starting point (by default, the beginning of a stream). For a regular
 /// stream, that starting point will be an event number. For the system
@@ -788,22 +738,24 @@ impl SubscribeToStream {
 ///
 /// All this process happens without the user has to do anything.
 pub struct RegularCatchupSubscribe {
+    client: StreamsClient<Channel>,
     stream_id: String,
     resolve_link_tos: bool,
     require_master: bool,
     batch_size: i32,
-    start_pos: i64,
+    revision: Option<u64>,
     creds_opt: Option<types::Credentials>,
 }
 
 impl RegularCatchupSubscribe {
-    pub(crate) fn new(stream_id: String) -> RegularCatchupSubscribe {
+    pub(crate) fn new(client: StreamsClient<Channel>, stream_id: String) -> RegularCatchupSubscribe {
         RegularCatchupSubscribe {
+            client,
             stream_id,
             resolve_link_tos: false,
             require_master: false,
             batch_size: 500,
-            start_pos: 0,
+            revision: None,
             creds_opt: None,
         }
     }
@@ -835,8 +787,9 @@ impl RegularCatchupSubscribe {
     /// as the subscription is dropped or closed.
     ///
     /// By default, it will start from the event number 0.
-    pub fn start_position(self, start_pos: i64) -> Self {
-        RegularCatchupSubscribe { start_pos, ..self }
+    pub fn start_position(self, start_pos: u64) -> Self {
+        let revision = Some(start_pos);
+        RegularCatchupSubscribe { revision, ..self }
     }
 
     /// Performs the command with the given credentials.
@@ -850,27 +803,74 @@ impl RegularCatchupSubscribe {
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
-    pub fn execute(self) -> types::Subscription {
-        unimplemented!()
+    pub async fn execute(
+        mut self,
+    ) -> Result<Box<dyn Stream<Item=Result<ResolvedEvent, tonic::Status>>>, tonic::Status> {
+        use futures::stream::TryStreamExt;
+        use streams::read_req::{Empty, Options};
+        use streams::read_req::options::{self, StreamOption, StreamOptions, SubscriptionOptions};
+        use streams::read_req::options::stream_options::RevisionOption;
+
+        let read_direction = 0; // <- Going forward.
+
+        let revision_option = match self.revision {
+            Some(rev) => RevisionOption::Revision(rev),
+            None => RevisionOption::Start(Empty{}),
+        };
+
+        let stream_options = StreamOptions {
+            stream_name: self.stream_id,
+            revision_option: Some(revision_option),
+        };
+
+        let uuid_option = options::UuidOption {
+            content: Some(options::uuid_option::Content::String(Empty{}))
+        };
+
+        let options = Options {
+            stream_option: Some(StreamOption::Stream(stream_options)),
+            resolve_links: self.resolve_link_tos,
+            filter_option: Some(options::FilterOption::NoFilter(Empty{})),
+            count_option: Some(options::CountOption::Subscription(SubscriptionOptions{})),
+            uuid_option: Some(uuid_option),
+            read_direction,
+        };
+
+        let req = streams::ReadReq {
+            options: Some(options),
+        };
+
+        let req = Request::new(req);
+
+        let stream = self.client.read(req)
+            .await?
+            .into_inner();
+
+        // TODO - I'm not so sure about that unwrap here.
+        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+
+        Ok(Box::new(stream))
     }
 }
 
 /// Like `RegularCatchupSubscribe` but specific to the system stream '$all'.
 pub struct AllCatchupSubscribe {
+    client: StreamsClient<Channel>,
     resolve_link_tos: bool,
     require_master: bool,
     batch_size: i32,
-    start_pos: types::Position,
+    revision: Option<Position>,
     creds_opt: Option<types::Credentials>,
 }
 
 impl AllCatchupSubscribe {
-    pub(crate) fn new() -> AllCatchupSubscribe {
+    pub(crate) fn new(client: StreamsClient<Channel>) -> AllCatchupSubscribe {
         AllCatchupSubscribe {
+            client,
             resolve_link_tos: false,
             require_master: false,
             batch_size: 500,
-            start_pos: types::Position::start(),
+            revision: None,
             creds_opt: None,
         }
     }
@@ -897,9 +897,11 @@ impl AllCatchupSubscribe {
     }
 
     /// Starting point in the transaction journal log. By default, it will start at
-    /// `types::Position::start`.
-    pub fn start_position(self, start_pos: types::Position) -> Self {
-        AllCatchupSubscribe { start_pos, ..self }
+    /// `Revision::Start`.
+    pub fn start_position(self, start_pos: Position) -> Self {
+        let revision = Some(start_pos);
+
+        AllCatchupSubscribe { revision, ..self }
     }
 
     /// Performs the command with the given credentials.
@@ -913,8 +915,62 @@ impl AllCatchupSubscribe {
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
-    pub async fn execute(self) -> types::Subscription {
-        unimplemented!()
+    pub async fn execute(
+        mut self,
+    ) -> Result<Box<dyn Stream<Item=Result<ResolvedEvent, tonic::Status>>>, tonic::Status> {
+        use futures::stream::TryStreamExt;
+        use streams::read_req::{Empty, Options};
+        use streams::read_req::options::{self, StreamOption, StreamOptions, SubscriptionOptions, AllOptions};
+        use streams::read_req::options::stream_options::RevisionOption;
+        use streams::read_req::options::all_options::AllOption;
+
+        let read_direction = 0; // <- Going forward.
+
+        let all_option = match self.revision {
+            Some(pos) => {
+                let pos = options::Position {
+                    commit_position: pos.commit,
+                    prepare_position: pos.prepare,
+                };
+
+                AllOption::Position(pos)
+            }
+
+            None => AllOption::Start(Empty{}),
+        };
+
+        let stream_options = AllOptions {
+            all_option: Some(all_option),
+        };
+
+
+        let uuid_option = options::UuidOption {
+            content: Some(options::uuid_option::Content::String(Empty{}))
+        };
+
+        let options = Options {
+            stream_option: Some(StreamOption::All(stream_options)),
+            resolve_links: self.resolve_link_tos,
+            filter_option: Some(options::FilterOption::NoFilter(Empty{})),
+            count_option: Some(options::CountOption::Subscription(SubscriptionOptions{})),
+            uuid_option: Some(uuid_option),
+            read_direction,
+        };
+
+        let req = streams::ReadReq {
+            options: Some(options),
+        };
+
+        let req = Request::new(req);
+
+        let stream = self.client.read(req)
+            .await?
+            .into_inner();
+
+        // TODO - I'm not so sure about that unwrap here.
+        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+
+        Ok(Box::new(stream))
     }
 }
 

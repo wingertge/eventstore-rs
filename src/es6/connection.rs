@@ -192,12 +192,6 @@ impl Connection {
         commands::DeleteStream::new(self.streams.clone(), stream)
     }
 
-    /// Subscribes to a given stream. You will get notified of each new events
-    /// written to this stream.
-    pub fn subcribe_to_stream(&self, stream_id: String) -> commands::SubscribeToStream {
-        commands::SubscribeToStream::new(stream_id)
-    }
-
     /// Subscribes to a given stream. This kind of subscription specifies a
     /// starting point (by default, the beginning of a stream). For a regular
     /// stream, that starting point will be an event number. For the system
@@ -213,14 +207,14 @@ impl Connection {
     ///
     /// [`subscribe_to_all_from`]: #method.subscribe_to_all_from
     pub fn subscribe_to_stream_from(&self, stream: String) -> commands::RegularCatchupSubscribe {
-        commands::RegularCatchupSubscribe::new(stream)
+        commands::RegularCatchupSubscribe::new(self.streams.clone(), stream)
     }
 
     /// Like [`subscribe_to_stream_from`] but specific to system `$all` stream.
     ///
     /// [`subscribe_to_stream_from`]: #method.subscribe_to_stream_from
     pub fn subscribe_to_all_from(&self) -> commands::AllCatchupSubscribe {
-        commands::AllCatchupSubscribe::new()
+        commands::AllCatchupSubscribe::new(self.streams.clone())
     }
 
     /// Creates a persistent subscription group on a stream.
