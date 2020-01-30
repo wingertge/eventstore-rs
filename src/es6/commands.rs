@@ -672,47 +672,92 @@ impl DeleteStream {
 
     /// Sends asynchronously the delete command to the server.
     pub async fn execute(mut self) -> Result<Option<Position>, tonic::Status> {
-        use streams::delete_req::{Options, Empty};
-        use streams::delete_req::options::ExpectedStreamRevision;
-        use streams::delete_resp::PositionOption;
+        if self.hard_delete {
+            use streams::tombstone_req::{Options, Empty};
+            use streams::tombstone_req::options::ExpectedStreamRevision;
+            use streams::tombstone_resp::PositionOption;
 
-        let expected_stream_revision = match self.version {
-            ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
-            ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
-            ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
-            ExpectedVersion::Exact(rev) => ExpectedStreamRevision::Revision(rev),
-        };
+            let expected_stream_revision = match self.version {
+                ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
+                ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
+                ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
+                ExpectedVersion::Exact(rev) => ExpectedStreamRevision::Revision(rev),
+            };
 
-        let expected_stream_revision = Some(expected_stream_revision);
+            let expected_stream_revision = Some(expected_stream_revision);
 
-        let options = Options {
-            stream_name: self.stream,
-            expected_stream_revision,
-        };
+            let options = Options {
+                stream_name: self.stream,
+                expected_stream_revision,
+            };
 
-        let req = Request::new(streams::DeleteReq {
-            options: Some(options),
-        });
+            let req = Request::new(streams::TombstoneReq {
+                options: Some(options),
+            });
 
-        let result = self.client.delete(req)
-            .await?
-            .into_inner();
+            let result = self.client.tombstone(req)
+                .await?
+                .into_inner();
 
-        if let Some(opts) = result.position_option {
-            match opts {
-                PositionOption::Position(pos) => {
-                    let pos = Position {
-                        commit: pos.commit_position,
-                        prepare: pos.prepare_position,
-                    };
+            if let Some(opts) = result.position_option {
+                match opts {
+                    PositionOption::Position(pos) => {
+                        let pos = Position {
+                            commit: pos.commit_position,
+                            prepare: pos.prepare_position,
+                        };
 
-                    Ok(Some(pos))
+                        Ok(Some(pos))
+                    }
+
+                    PositionOption::Empty(_) => Ok(None),
                 }
-
-                PositionOption::Empty(_) => Ok(None),
+            } else {
+                Ok(None)
             }
         } else {
-            Ok(None)
+            use streams::delete_req::{Options, Empty};
+            use streams::delete_req::options::ExpectedStreamRevision;
+            use streams::delete_resp::PositionOption;
+
+            let expected_stream_revision = match self.version {
+                ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty{}),
+                ExpectedVersion::NoStream => ExpectedStreamRevision::NoStream(Empty{}),
+                ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty{}),
+                ExpectedVersion::Exact(rev) => ExpectedStreamRevision::Revision(rev),
+            };
+
+            let expected_stream_revision = Some(expected_stream_revision);
+
+            let options = Options {
+                stream_name: self.stream,
+                expected_stream_revision,
+            };
+
+            let req = Request::new(streams::DeleteReq {
+                options: Some(options),
+            });
+
+            let result = self.client.delete(req)
+                .await?
+                .into_inner();
+
+            if let Some(opts) = result.position_option {
+                match opts {
+                    PositionOption::Position(pos) => {
+                        let pos = Position {
+                            commit: pos.commit_position,
+                            prepare: pos.prepare_position,
+                        };
+
+                        Ok(Some(pos))
+                    }
+
+                    PositionOption::Empty(_) => Ok(None),
+                }
+            } else {
+                Ok(None)
+            }
         }
     }
 }
