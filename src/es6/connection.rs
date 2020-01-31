@@ -245,7 +245,7 @@ impl Connection {
         stream_id: String,
         group_name: String,
     ) -> commands::DeletePersistentSubscription {
-        commands::DeletePersistentSubscription::new(stream_id, group_name)
+        commands::DeletePersistentSubscription::new(self.persistent.clone(), stream_id, group_name)
     }
 
     /// Connects to a persistent subscription group on a stream.

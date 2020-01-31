@@ -1205,6 +1205,7 @@ impl UpdatePersistentSubscription {
 
 /// Command that  deletes a persistent subscription.
 pub struct DeletePersistentSubscription {
+    client: PersistentSubscriptionsClient<Channel>,
     stream_id: String,
     group_name: String,
     creds: Option<types::Credentials>,
@@ -1212,10 +1213,12 @@ pub struct DeletePersistentSubscription {
 
 impl DeletePersistentSubscription {
     pub(crate) fn new(
+        client: PersistentSubscriptionsClient<Channel>,
         stream_id: String,
         group_name: String,
     ) -> DeletePersistentSubscription {
         DeletePersistentSubscription {
+            client,
             stream_id,
             group_name,
             creds: None,
@@ -1233,7 +1236,20 @@ impl DeletePersistentSubscription {
     /// Sends the persistent subscription deletion command asynchronously to
     /// the server.
     pub async fn execute(mut self) -> Result<(), tonic::Status> {
-        unimplemented!()
+        use persistent::delete_req::Options;
+
+        let options = Options {
+            stream_name: self.stream_id,
+            group_name: self.group_name,
+        };
+
+        let req = persistent::DeleteReq {
+            options: Some(options),
+        };
+
+        self.client.delete(Request::new(req)).await?;
+
+        Ok(())
     }
 }
 
