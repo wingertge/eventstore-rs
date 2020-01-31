@@ -1258,18 +1258,21 @@ impl DeletePersistentSubscription {
 /// compared to a regular subscription where the client hols the subscription
 /// state.
 pub struct ConnectToPersistentSubscription {
+    client: PersistentSubscriptionsClient<Channel>,
     stream_id: String,
     group_name: String,
-    batch_size: u16,
+    batch_size: i32,
     creds: Option<types::Credentials>,
 }
 
 impl ConnectToPersistentSubscription {
     pub(crate) fn new(
+        client: PersistentSubscriptionsClient<Channel>,
         stream_id: String,
         group_name: String,
     ) -> ConnectToPersistentSubscription {
         ConnectToPersistentSubscription {
+            client,
             stream_id,
             group_name,
             batch_size: 10,
@@ -1286,13 +1289,38 @@ impl ConnectToPersistentSubscription {
     }
 
     /// The buffer size to use  for the persistent subscription.
-    pub fn batch_size(self, batch_size: u16) -> Self {
+    pub fn batch_size(self, batch_size: i32) -> Self {
         ConnectToPersistentSubscription { batch_size, ..self }
     }
 
     /// Sends the persistent subscription connection request to the server
     /// asynchronously even if the subscription is available right away.
-    pub fn execute(self) -> types::Subscription {
+    pub async fn execute(mut self) -> Result<(), tonic::Status> {
+        use futures::stream::once;
+        use persistent::ReadReq;
+        use persistent::read_req::{self, Options, Empty};
+        use persistent::read_req::options::{self, UuidOption};
+
+        let uuid_option = UuidOption {
+            content: Some(options::uuid_option::Content::String(Empty{})),
+        };
+
+        let options = Options {
+            stream_name: self.stream_id,
+            group_name: self.group_name,
+            buffer_size: self.batch_size,
+            uuid_option: Some(uuid_option),
+        };
+
+        let req = ReadReq {
+            content: Some(read_req::Content::Options(options)),
+        };
+
+        let payload = once(async { req });
+        let req = Request::new(payload);
+
+        self.client.read(req).await?;
+
         unimplemented!()
     }
 }

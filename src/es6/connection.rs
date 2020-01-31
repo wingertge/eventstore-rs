@@ -254,7 +254,7 @@ impl Connection {
         stream_id: String,
         group_name: String,
     ) -> commands::ConnectToPersistentSubscription {
-        commands::ConnectToPersistentSubscription::new(stream_id, group_name)
+        commands::ConnectToPersistentSubscription::new(self.persistent.clone(), stream_id, group_name)
     }
 
     /// Closes the connection to the server.
