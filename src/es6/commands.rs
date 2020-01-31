@@ -11,6 +11,7 @@ use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revis
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
 use persistent::persistent_subscriptions_client::PersistentSubscriptionsClient;
+use std::marker::Unpin;
 
 pub mod streams {
     tonic::include_proto!("event_store.client.streams");
@@ -60,6 +61,30 @@ fn raw_uuid_to_uuid(
     }
 }
 
+fn raw_persistent_uuid_to_uuid(
+    src: persistent::Uuid,
+) -> uuid::Uuid {
+    use byteorder::{ByteOrder, BigEndian};
+
+    let value = src.value.expect("We expect Uuid value to be defined for now");
+
+    match value {
+        persistent::uuid::Value::Structured(s) => {
+            let mut buf = vec![];
+
+            BigEndian::write_i64(&mut buf, s.most_significant_bits);
+            BigEndian::write_i64(&mut buf, s.least_significant_bits);
+
+            uuid::Uuid::from_slice(buf.as_slice())
+                .expect("We expect a valid UUID out of byte buffer")
+        }
+
+        persistent::uuid::Value::String(s) => {
+            s.parse().expect("We expect a valid UUID out of this String")
+        }
+    }
+}
+
 fn convert_event_data(
     mut event: EventData,
 ) -> streams::AppendReq {
@@ -100,6 +125,49 @@ fn convert_proto_recorded_event(
         .id
         .map(raw_uuid_to_uuid)
         .expect("Unable to parse Uuid [convert_proto_recorded_event]");
+
+    let position = Position {
+        commit: event.commit_position,
+        prepare: event.prepare_position,
+    };
+
+    let event_type =
+        if let Some(tpe) = event.metadata.remove(&"type".to_owned()) {
+            tpe
+        } else {
+            "<no-event-type-provided>".to_owned()
+        };
+
+    let is_json =
+        if let Some(is_json) = event.metadata.remove(&"is-json".to_owned()) {
+            match is_json.as_str() {
+                "true" => true,
+                "false" => false,
+                unknown => panic!("Unknown [{}] 'is_json' metadata value"),
+            }
+        } else {
+            false
+        };
+
+    RecordedEvent {
+        id,
+        stream_id: event.stream_name,
+        revision: event.stream_revision,
+        position,
+        event_type,
+        is_json,
+        metadata: event.custom_metadata.into(),
+        data: event.data.into(),
+    }
+}
+
+fn convert_persistent_proto_recorded_event(
+    mut event: persistent::read_resp::read_event::RecordedEvent,
+) -> RecordedEvent {
+    let id = event
+        .id
+        .map(raw_persistent_uuid_to_uuid)
+        .expect("Unable to parse Uuid [convert_persistent_proto_recorded_event]");
 
     let position = Position {
         commit: event.commit_position,
@@ -204,6 +272,26 @@ fn convert_proto_read_event(
     ResolvedEvent {
         event: event.event.map(convert_proto_recorded_event),
         link: event.link.map(convert_proto_recorded_event),
+        commit_position,
+    }
+}
+
+fn convert_persistent_proto_read_event(
+    event: persistent::read_resp::ReadEvent,
+) -> ResolvedEvent {
+    let commit_position =
+        if let Some(pos_alt) = event.position {
+            match pos_alt {
+                persistent::read_resp::read_event::Position::CommitPosition(pos) => Some(pos),
+                persistent::read_resp::read_event::Position::NoPosition(_) => None,
+            }
+        } else {
+            None
+        };
+
+    ResolvedEvent {
+        event: event.event.map(convert_persistent_proto_recorded_event),
+        link: event.link.map(convert_persistent_proto_recorded_event),
         commit_position,
     }
 }
@@ -1295,11 +1383,13 @@ impl ConnectToPersistentSubscription {
 
     /// Sends the persistent subscription connection request to the server
     /// asynchronously even if the subscription is available right away.
-    pub async fn execute(mut self) -> Result<(), tonic::Status> {
+    pub async fn execute(mut self) -> Result<(SubscriptionRead, SubscriptionWrite), tonic::Status> {
+        use futures::stream::TryStreamExt;
         use futures::stream::once;
         use persistent::ReadReq;
         use persistent::read_req::{self, Options, Empty};
         use persistent::read_req::options::{self, UuidOption};
+        use persistent::read_resp;
 
         let uuid_option = UuidOption {
             content: Some(options::uuid_option::Content::String(Empty{})),
@@ -1319,8 +1409,123 @@ impl ConnectToPersistentSubscription {
         let payload = once(async { req });
         let req = Request::new(payload);
 
-        self.client.read(req).await?;
+        let stream = self
+            .client
+            .read(req)
+            .await?
+            .into_inner();
 
-        unimplemented!()
+        let stream = stream.map_ok(|resp| {
+            match resp.content.expect("Why response content wouldn't be defined?") {
+                read_resp::Content::Event(evt) =>
+                    convert_persistent_proto_read_event(evt),
+
+                read_resp::Content::Empty(_) => {
+                    panic!("Pretty sure it shouldn't happen but during the preview phase, I let that panic message")
+                }
+            }
+        });
+
+        let read = SubscriptionRead {
+            inner: Box::new(stream),
+        };
+        let write = SubscriptionWrite {
+            client: self.client.clone(),
+        };
+
+        Ok((read, write))
+    }
+}
+
+pub struct SubscriptionRead {
+    inner: Box<dyn Stream<Item=Result<ResolvedEvent, tonic::Status>> + Unpin>,
+}
+
+impl SubscriptionRead {
+    pub async fn next(&mut self) -> Option<Result<ResolvedEvent, tonic::Status>> {
+        use futures::stream::StreamExt;
+
+        self.inner.next().await
+    }
+}
+fn to_proto_uuid(id: uuid::Uuid) -> persistent::Uuid {
+    persistent::Uuid {
+        value: Some(persistent::uuid::Value::String(format!("{}", id))),
+    }
+}
+
+pub struct SubscriptionWrite {
+    client: PersistentSubscriptionsClient<Channel>,
+}
+
+impl SubscriptionWrite {
+    pub async fn ack<I>(&mut self, event_ids: I) -> Result<(), tonic::Status>
+    where
+        I: Iterator<Item=uuid::Uuid>,
+    {
+        use futures::stream::once;
+        use persistent::ReadReq;
+        use persistent::read_req::{self, Ack, Empty, Content};
+        use persistent::read_req::options::{self, UuidOption};
+
+        let ids = event_ids.map(to_proto_uuid).collect();
+
+        let ack = Ack {
+            id: Vec::new(),
+            ids,
+        };
+
+        let content = Content::Ack(ack);
+        let req = ReadReq {
+            content: Some(content),
+        };
+        let payload = once(async { req });
+
+        self.client.read(Request::new(payload)).await?;
+
+        Ok(())
+    }
+
+    pub async fn nack<I>(
+        &mut self,
+        event_ids: I,
+        action: types::NakAction,
+        reason: String,
+    ) -> Result<(), tonic::Status>
+    where
+        I: Iterator<Item=uuid::Uuid>,
+    {
+        use futures::stream::TryStreamExt;
+        use futures::stream::once;
+        use persistent::ReadReq;
+        use persistent::read_req::{self, Nack, Empty, Content};
+        use persistent::read_req::options::{self, UuidOption};
+
+        let ids = event_ids.map(to_proto_uuid).collect();
+
+        let action = match action {
+            types::NakAction::Unknown => 0,
+            types::NakAction::Park => 1,
+            types::NakAction::Retry => 2,
+            types::NakAction::Skip => 3,
+            types::NakAction::Stop => 4,
+        };
+
+        let nack = Nack {
+            id: Vec::new(),
+            ids,
+            action,
+            reason,
+        };
+
+        let content = Content::Nack(nack);
+        let req = ReadReq {
+            content: Some(content),
+        };
+        let payload = once(async { req });
+
+        self.client.read(Request::new(payload)).await?;
+
+        Ok(())
     }
 }
