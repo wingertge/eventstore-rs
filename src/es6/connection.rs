@@ -6,7 +6,7 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 
 use crate::discovery;
-use crate::es6::commands::{self, streams};
+use crate::es6::commands::{self, streams, persistent};
 use crate::internal::messaging::{Msg, OpMsg};
 use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, StreamMetadata};
 
@@ -26,6 +26,7 @@ use tonic::transport::Channel;
 /// in this way.
 pub struct Connection {
     streams: streams::streams_client::StreamsClient<Channel>,
+    persistent: persistent::persistent_subscriptions_client::PersistentSubscriptionsClient<Channel>,
 }
 
 /// Helps constructing a connection to the server.
@@ -140,9 +141,6 @@ impl Connection {
     async fn initialize(settings: &Settings, discovery: DiscoveryProcess)
         -> Result<Connection, Box<dyn std::error::Error>>
     {
-        // let (sender, _) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
-        // let (_, run_discovery) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
-
         match discovery {
             DiscoveryProcess::Static(addr) => {
                 let uri = format!("https://{}", addr).parse::<http::uri::Uri>()?;
@@ -151,7 +149,8 @@ impl Connection {
                     .await?;
 
                 let conn = Connection{
-                    streams: streams::streams_client::StreamsClient::new(channel),
+                    streams: streams::streams_client::StreamsClient::new(channel.clone()),
+                    persistent: persistent::persistent_subscriptions_client::PersistentSubscriptionsClient::new(channel),
                 };
 
                 Ok(conn)
@@ -228,7 +227,7 @@ impl Connection {
         stream_id: String,
         group_name: String,
     ) -> commands::CreatePersistentSubscription {
-        commands::CreatePersistentSubscription::new(stream_id, group_name)
+        commands::CreatePersistentSubscription::new(self.persistent.clone(), stream_id, group_name)
     }
 
     /// Updates a persistent subscription group on a stream.
@@ -237,7 +236,7 @@ impl Connection {
         stream_id: String,
         group_name: String,
     ) -> commands::UpdatePersistentSubscription {
-        commands::UpdatePersistentSubscription::new(stream_id, group_name)
+        commands::UpdatePersistentSubscription::new(self.persistent.clone(), stream_id, group_name)
     }
 
     /// Deletes a persistent subscription group on a stream.

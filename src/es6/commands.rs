@@ -6,7 +6,7 @@ use futures::Stream;
 use futures::stream::{self, TryStreamExt};
 
 use crate::types::{self, OperationError, Slice};
-use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision, ResolvedEvent, RecordedEvent};
+use crate::es6::types::{ExpectedVersion, Position, EventData, WriteResult, Revision, ResolvedEvent, RecordedEvent, PersistentSubscriptionSettings};
 
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -136,28 +136,54 @@ fn convert_proto_recorded_event(
     }
 }
 
-fn convert_settings(
-    settings: types::PersistentSubscriptionSettings,
+fn convert_settings_create(
+    settings: PersistentSubscriptionSettings,
 ) -> persistent::create_req::Settings {
-    let named_consumer_strategy = match settings.strategy {
+    let named_consumer_strategy = match settings.named_consumer_strategy {
         types::SystemConsumerStrategy::DispatchToSingle => 0,
         types::SystemConsumerStrategy::RoundRobin => 1,
         types::SystemConsumerStrategy::Pinned => 2,
     };
 
     persistent::create_req::Settings {
-        resolve_links: settings.resolve_link_tos,
-        revision: settings.revision as u64,
+        resolve_links: settings.resolve_links,
+        revision: settings.revision,
         extra_statistics: settings.extra_stats,
-        message_timeout: settings.msg_timeout.as_millis() as i64,
-        max_retry_count: settings.max_retry_count as i32,
+        message_timeout: settings.message_timeout.as_millis() as i64,
+        max_retry_count: settings.max_retry_count,
         checkpoint_after: settings.checkpoint_after.as_millis() as i64,
-        min_checkpoint_count: settings.min_checkpoint_count as i32,
-        max_checkpoint_count: settings.max_checkpoint_count as i32,
-        max_subscriber_count: settings.max_subs_count as i32,
-        live_buffer_size: settings.live_buffer_size as i32,
-        read_batch_size: settings.read_batch_size as i32,
-        history_batch_size: settings.history_batch_size as i32,
+        min_checkpoint_count: settings.min_checkpoint_count,
+        max_checkpoint_count: settings.max_checkpoint_count,
+        max_subscriber_count: settings.max_subscriber_count,
+        live_buffer_size: settings.live_buffer_size,
+        read_batch_size: settings.read_batch_size,
+        history_buffer_size: settings.history_buffer_size,
+        named_consumer_strategy,
+    }
+}
+
+fn convert_settings_update(
+    settings: PersistentSubscriptionSettings,
+) -> persistent::update_req::Settings {
+    let named_consumer_strategy = match settings.named_consumer_strategy {
+        types::SystemConsumerStrategy::DispatchToSingle => 0,
+        types::SystemConsumerStrategy::RoundRobin => 1,
+        types::SystemConsumerStrategy::Pinned => 2,
+    };
+
+    persistent::update_req::Settings {
+        resolve_links: settings.resolve_links,
+        revision: settings.revision,
+        extra_statistics: settings.extra_stats,
+        message_timeout: settings.message_timeout.as_millis() as i64,
+        max_retry_count: settings.max_retry_count,
+        checkpoint_after: settings.checkpoint_after.as_millis() as i64,
+        min_checkpoint_count: settings.min_checkpoint_count,
+        max_checkpoint_count: settings.max_checkpoint_count,
+        max_subscriber_count: settings.max_subscriber_count,
+        live_buffer_size: settings.live_buffer_size,
+        read_batch_size: settings.read_batch_size,
+        history_buffer_size: settings.history_buffer_size,
         named_consumer_strategy,
     }
 }
@@ -1051,22 +1077,25 @@ impl AllCatchupSubscribe {
 
 /// A command that creates a persistent subscription for a given group.
 pub struct CreatePersistentSubscription {
+    client: PersistentSubscriptionsClient<Channel>,
     stream_id: String,
     group_name: String,
-    sub_settings: types::PersistentSubscriptionSettings,
+    sub_settings: PersistentSubscriptionSettings,
     creds: Option<types::Credentials>,
 }
 
 impl CreatePersistentSubscription {
     pub(crate) fn new(
+        client: PersistentSubscriptionsClient<Channel>,
         stream_id: String,
         group_name: String,
     ) -> CreatePersistentSubscription {
         CreatePersistentSubscription {
+            client,
             stream_id,
             group_name,
             creds: None,
-            sub_settings: types::PersistentSubscriptionSettings::default(),
+            sub_settings: PersistentSubscriptionSettings::default(),
         }
     }
 
@@ -1080,7 +1109,7 @@ impl CreatePersistentSubscription {
 
     /// Creates a persistent subscription based on the given
     /// `types::PersistentSubscriptionSettings`.
-    pub fn settings(self, sub_settings: types::PersistentSubscriptionSettings) -> Self {
+    pub fn settings(self, sub_settings: PersistentSubscriptionSettings) -> Self {
         CreatePersistentSubscription {
             sub_settings,
             ..self
@@ -1089,31 +1118,48 @@ impl CreatePersistentSubscription {
 
     /// Sends the persistent subscription creation command asynchronously to
     /// the server.
-    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+    pub async fn execute(mut self) -> Result<(), tonic::Status> {
         use persistent::CreateReq;
-        use persistent::create_req;
-        unimplemented!()
+        use persistent::create_req::Options;
+
+        let settings = convert_settings_create(self.sub_settings);
+        let options = Options {
+            stream_name: self.stream_id,
+            group_name: self.group_name,
+            settings: Some(settings),
+        };
+
+        let req = CreateReq {
+            options: Some(options),
+        };
+
+        self.client.create(Request::new(req)).await?;
+
+        Ok(())
     }
 }
 
 /// Command that updates an already existing subscription's settings.
 pub struct UpdatePersistentSubscription {
+    client: PersistentSubscriptionsClient<Channel>,
     stream_id: String,
     group_name: String,
-    sub_settings: types::PersistentSubscriptionSettings,
+    sub_settings: PersistentSubscriptionSettings,
     creds: Option<types::Credentials>,
 }
 
 impl UpdatePersistentSubscription {
     pub(crate) fn new(
+        client: PersistentSubscriptionsClient<Channel>,
         stream_id: String,
         group_name: String,
     ) -> UpdatePersistentSubscription {
         UpdatePersistentSubscription {
+            client,
             stream_id,
             group_name,
             creds: None,
-            sub_settings: types::PersistentSubscriptionSettings::default(),
+            sub_settings: PersistentSubscriptionSettings::default(),
         }
     }
 
@@ -1127,7 +1173,7 @@ impl UpdatePersistentSubscription {
 
     /// Updates a persistent subscription using the given
     /// `types::PersistentSubscriptionSettings`.
-    pub fn settings(self, sub_settings: types::PersistentSubscriptionSettings) -> Self {
+    pub fn settings(self, sub_settings: PersistentSubscriptionSettings) -> Self {
         UpdatePersistentSubscription {
             sub_settings,
             ..self
@@ -1136,8 +1182,24 @@ impl UpdatePersistentSubscription {
 
     /// Sends the persistent subscription update command asynchronously to
     /// the server.
-    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
-        unimplemented!()
+    pub async fn execute(mut self) -> Result<(), tonic::Status> {
+        use persistent::UpdateReq;
+        use persistent::update_req::Options;
+
+        let settings = convert_settings_update(self.sub_settings);
+        let options = Options {
+            stream_name: self.stream_id,
+            group_name: self.group_name,
+            settings: Some(settings),
+        };
+
+        let req = UpdateReq {
+            options: Some(options),
+        };
+
+        self.client.update(Request::new(req)).await?;
+
+        Ok(())
     }
 }
 
@@ -1170,7 +1232,7 @@ impl DeletePersistentSubscription {
 
     /// Sends the persistent subscription deletion command asynchronously to
     /// the server.
-    pub async fn execute(self) -> Result<types::PersistActionResult, OperationError> {
+    pub async fn execute(mut self) -> Result<(), tonic::Status> {
         unimplemented!()
     }
 }

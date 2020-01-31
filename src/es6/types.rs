@@ -5,6 +5,7 @@ use crate::types;
 use uuid::Uuid;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
+use std::time::Duration;
 
 /// Constants used for expected version control.
 /// The use of expected version can be a bit tricky especially when discussing
@@ -193,4 +194,78 @@ pub struct RecordedEvent {
 
     /// An event position in the $all stream.
     pub position: Position,
+}
+
+/// Gathers every persistent subscription property.
+#[derive(Debug, Clone, Copy)]
+pub struct PersistentSubscriptionSettings {
+    /// Whether or not the persistent subscription shoud resolve 'linkTo'
+    /// events to their linked events.
+    pub resolve_links: bool,
+
+    /// Where the subscription should start from (event number).
+    pub revision: u64,
+
+    /// Whether or not in depth latency statistics should be tracked on this
+    /// subscription.
+    pub extra_stats: bool,
+
+    /// The amount of time after which a message should be considered to be
+    /// timeout and retried.
+    pub message_timeout: Duration,
+
+    /// The maximum number of retries (due to timeout) before a message get
+    /// considered to be parked.
+    pub max_retry_count: i32,
+
+    /// The size of the buffer listenning to live messages as they happen.
+    pub live_buffer_size: i32,
+
+    /// The number of events read at a time when paging in history.
+    pub read_batch_size: i32,
+
+    /// The number of events to cache when paging through history.
+    pub history_buffer_size: i32,
+
+    /// The amount of time to try checkpoint after.
+    pub checkpoint_after: Duration,
+
+    /// The minimum number of messages to checkpoint.
+    pub min_checkpoint_count: i32,
+
+    /// The maximum number of messages to checkpoint. If this number is reached
+    /// , a checkpoint will be forced.
+    pub max_checkpoint_count: i32,
+
+    /// The maximum number of subscribers allowed.
+    pub max_subscriber_count: i32,
+
+    /// The strategy to use for distributing events to client consumers.
+    pub named_consumer_strategy: types::SystemConsumerStrategy,
+}
+
+impl PersistentSubscriptionSettings {
+    pub fn default() -> PersistentSubscriptionSettings {
+        PersistentSubscriptionSettings {
+            resolve_links: false,
+            revision: 0,
+            extra_stats: false,
+            message_timeout: Duration::from_secs(30),
+            max_retry_count: 10,
+            live_buffer_size: 500,
+            read_batch_size: 20,
+            history_buffer_size: 500,
+            checkpoint_after: Duration::from_secs(2),
+            min_checkpoint_count: 10,
+            max_checkpoint_count: 1_000,
+            max_subscriber_count: 0, // Means their is no limit.
+            named_consumer_strategy: types::SystemConsumerStrategy::RoundRobin,
+        }
+    }
+}
+
+impl Default for PersistentSubscriptionSettings {
+    fn default() -> PersistentSubscriptionSettings {
+        PersistentSubscriptionSettings::default()
+    }
 }
