@@ -32,7 +32,9 @@ es6 = [
   "tonic",
   "prost",
   "prost-derive",
-  "prost-types"
+  "prost-types",
+  "rustls",
+  "webpki"
 ]
 
 [dependencies]
@@ -51,10 +53,12 @@ vec1 = "1.4"
 rand = "0.7"
 byteorder = { version = "1.2", optional = true }
 http = { version = "0.2", optional = true }
-tonic = { version = "0.1", optional = true }
+tonic = { version = "0.1", features = ["tls", "tls-roots"], optional = true }
 prost = { version = "0.6", optional = true }
 prost-derive = { version = "0.6", optional = true }
 prost-types = { version = "0.6", optional = true }
+rustls = { version = "^0.16", features = ["dangerous_configuration"], optional = true }
+webpki = { version = "0.21", optional = true }
 
 [build-dependencies]
 protoc-rust = "=2.8.1"

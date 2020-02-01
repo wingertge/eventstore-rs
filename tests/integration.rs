@@ -621,6 +621,7 @@ async fn test_persistent_subscription(
     Ok(())
 }
 
+#[cfg(not(feature = "es6"))]
 #[test]
 fn all_round_operation_test() {
     block_on(async {
@@ -662,4 +663,55 @@ fn all_round_operation_test() {
         Ok(()) as Result<(), Box<dyn Error>>
     })
     .unwrap();
+}
+
+fn es6_generate_events(event_type: String, cnt: usize) -> Vec<eventstore::es6::types::EventData> {
+    let mut events = Vec::with_capacity(cnt);
+
+    for idx in 1..cnt + 1 {
+        let payload = json!({
+            "event_index": idx,
+        });
+
+        let data = eventstore::es6::types::EventData::json(event_type.clone(), payload).unwrap();
+        events.push(data);
+    }
+
+    events
+}
+
+#[cfg(feature = "es6")]
+#[test]
+fn es6_preview_test() {
+    block_on(async {
+        use std::env;
+        use futures::stream;
+
+        env_logger::init();
+
+        let host = env::var("EVENTSTORE_HOST").unwrap_or("localhost".to_string());
+        let conn_str = format!("{}:2113", host);
+
+        info!("Connection string: {}", conn_str);
+
+        let endpoint = conn_str.to_socket_addrs().unwrap().next().unwrap();
+
+        let connection = eventstore::es6::connection::Connection::builder()
+            .with_default_user(eventstore::Credentials::new("admin", "changeit"))
+            .single_node_connection(endpoint)
+            .await?;
+
+        let stream_id = fresh_stream_id("write-events");
+        let events = es6_generate_events("es6-write-events-test".to_string(), 3);
+
+        let result = connection
+            .write_events(stream_id)
+            .send(stream::iter(events))
+            .await?;
+
+        debug!("Write response: {:?}", result);
+
+        Ok(()) as Result<(), Box<dyn std::error::Error>>
+   }).unwrap();
+
 }

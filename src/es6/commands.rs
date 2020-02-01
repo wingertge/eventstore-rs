@@ -394,6 +394,15 @@ impl WriteEvents {
 
         Ok(write_result)
     }
+
+    // pub async fn send_iterator<I>(self, iter: I) -> Result<WriteResult, tonic::Status>
+    // where
+    //     I: IntoIterator<Item=EventData> + Sync + Send,
+    // {
+    //     use futures::stream;
+
+    //     self.send(stream::iter(iter)).await
+    // }
 }
 
 /// A command that reads several events from a stream. It can read events

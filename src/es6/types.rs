@@ -43,7 +43,7 @@ pub struct EventData {
 
 impl EventData {
     /// Creates an event with a JSON payload.
-    pub fn json<P, S>(event_type: String, payload: P) -> serde_json::Result<EventData>
+    pub fn json<P>(event_type: String, payload: P) -> serde_json::Result<EventData>
     where
         P: Serialize,
     {

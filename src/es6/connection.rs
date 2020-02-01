@@ -12,6 +12,20 @@ use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, St
 
 use tonic::transport::Channel;
 
+struct NoVerification;
+
+impl rustls::ServerCertVerifier for NoVerification {
+    fn verify_server_cert(
+        &self,
+        _roots: &rustls::RootCertStore,
+        _presented_certs: &[rustls::Certificate],
+        _dns_name: webpki::DNSNameRef,
+        _ocsp_response: &[u8],
+    ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+        Ok(rustls::ServerCertVerified::assertion())
+    }
+}
+
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
 /// quite differently than say a SQL connection. Normally when you use an
@@ -143,8 +157,19 @@ impl Connection {
     {
         match discovery {
             DiscoveryProcess::Static(addr) => {
-                let uri = format!("https://{}", addr).parse::<http::uri::Uri>()?;
+                // let uri = format!("https://{}/", addr).parse::<http::uri::Uri>()?;
+                let uri = "https://localhost:2113/".parse::<http::uri::Uri>()?;
+                println!(">>>>>>>> {:?}", uri);
+                let mut rustls_config = rustls::ClientConfig::new();
+
+                rustls_config.dangerous()
+                    .set_certificate_verifier(std::sync::Arc::new(NoVerification));
+
+                let client_config = tonic::transport::ClientTlsConfig::new()
+                    .rustls_client_config(rustls_config);
+
                 let channel = Channel::builder(uri)
+                    .tls_config(client_config)
                     .connect()
                     .await?;
 
