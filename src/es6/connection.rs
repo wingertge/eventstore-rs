@@ -161,6 +161,9 @@ impl Connection {
                 let uri = "https://localhost:2113/".parse::<http::uri::Uri>()?;
                 println!(">>>>>>>> {:?}", uri);
                 let mut rustls_config = rustls::ClientConfig::new();
+                let protocols = vec![(b"h2".to_vec())];
+
+                rustls_config.set_protocols(protocols.as_slice());
 
                 rustls_config.dangerous()
                     .set_certificate_verifier(std::sync::Arc::new(NoVerification));
